@@ -13,6 +13,8 @@
     "preview": "vite preview",
     "electron:build": "npm run build && electron-builder",
     "electron:pack": "npm run build && electron-builder --dir",
+    "electron:build:linux": "npm run build && electron-builder --linux",
+    "electron:pack:linux": "npm run build && electron-builder --linux --dir",
     "gen:icon": "node tools/gen-icon.cjs",
     "verify:memory": "node tools/verify/m-run-all.cjs"
   },
@@ -66,6 +68,9 @@
       "electron/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "**/*.node"
+    ],
     "extraResources": [
       {
         "from": "build/icon.png",
@@ -74,10 +79,6 @@
       {
         "from": "build/tray.png",
         "to": "build/tray.png"
-      },
-      {
-        "from": "resources/sqlcipher",
-        "to": "sqlcipher"
       },
       {
         "from": "tools/mcp-memory-server.cjs",
@@ -99,7 +100,34 @@
           ]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "extraResources": [
+        {
+          "from": "resources/sqlcipher",
+          "to": "sqlcipher"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "Utility",
+      "maintainer": "HUIdada1",
+      "synopsis": "Agent 中控台：技能仓库 / 用量同步 / 反代网关 / 记忆中枢",
+      "executableName": "agenthub",
+      "extraResources": [
+        {
+          "from": "resources/sqlcipher-linux-x64",
+          "to": "sqlcipher-linux-x64"
+        }
+      ]
     },
     "nsis": {
       "include": "build/installer.nsh",

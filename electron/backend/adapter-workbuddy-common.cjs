@@ -18,7 +18,7 @@ const crypto = require("node:crypto");
 const { normalizeModel, providerName } = require("./adapter-zcode.cjs");
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 /** 时间戳兼容读取：epoch 秒 / epoch 毫秒 / ISO 字符串（小于 1e11 按秒计，与 reasonix 同口径） */

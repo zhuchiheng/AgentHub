@@ -18,6 +18,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Windows 先跑：由它创建 Release 与 tag（electron-builder 首次发布）；
+  # Linux job 随后把 AppImage 追加进同一个 Release（needs 保证顺序，避免两边抢建 tag）。
   build:
     runs-on: windows-latest
     permissions:
@@ -64,8 +66,8 @@ jobs:
       - name: 类型检查与前端构建（vue-tsc 门禁）
         run: npm run build
 
-      - name: 打包并发布 Release
-        run: npx electron-builder --publish always
+      - name: 打包并发布 Release（Windows）
+        run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -99,4 +101,55 @@ jobs:
             sleep 20
           done
           echo "::error::latest.yml 发布校验失败（2 分钟内仍不可下载、版本不匹配或缺 releaseNotes），请检查 Release 资产"
+          exit 1
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    needs: build # Release/tag 由 Windows job 先建好，这里只追加资产
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # 打包 AppImage 本身不需要这些库，但若构建过程中拉起 Electron 做冒烟检查会用到；
+      # libsecret-1-dev 对应 safeStorage：目标机缺 libsecret 时密码会降级明文存储。
+      - name: 安装 Linux 构建依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libnss3 libgtk-3-0 libnotify4 libsecret-1-0 libgbm1 libasound2 xdg-utils
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查与前端构建（vue-tsc 门禁）
+        run: npm run build
+
+      - name: 打包并发布 Release（Linux AppImage）
+        run: npx electron-builder --linux --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Linux 客户端读的是 latest-linux.yml（不是 latest.yml），必须单独校验：
+      # 少了它 AppImage 的更新检查会一直拿不到新版本。
+      - name: 校验 latest-linux.yml 已正确发布
+        shell: bash
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          URL="https://github.com/HUIdada1/AgentHub/releases/download/v${PKG_VERSION}/latest-linux.yml"
+          for i in 1 2 3 4 5 6; do
+            YML="$(curl -fsSL "$URL" 2>/dev/null || true)"
+            if grep -q "^version: ${PKG_VERSION}$" <<< "$YML"; then
+              echo "latest-linux.yml 校验通过：version ${PKG_VERSION}"
+              exit 0
+            fi
+            echo "第 $i 次校验未通过，20 秒后重试…"
+            sleep 20
+          done
+          echo "::error::latest-linux.yml 发布校验失败，请检查 Release 资产"
           exit 1

@@ -17,6 +17,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execSync, spawn } = require("node:child_process");
+const proc = require("./proc.cjs");
 
 /** 客户端进程：主进程 + 内嵌 ACP 运行时，两者运行期间都会回写 auth.json */
 const PROC_MAIN = "商汤小浣熊.exe";
@@ -32,15 +33,13 @@ function syncSleep(ms) {
   }
 }
 
-/** tasklist 单进程探测：命中输出含 ".exe"，未命中输出中文提示（兜底输出乱码也不影响判定） */
+/**
+ * 单进程探测（跨平台：Windows 走 tasklist，Unix 走 pgrep）。
+ * 注意：不能对非 Windows 直接 return false —— 那会让切号流程永远认为客户端没在跑，
+ * 于是跳过「先关客户端」，运行中的客户端一回写就把新账号覆盖成旧账号。
+ */
 function procRunning(name) {
-  if (process.platform !== "win32") return false;
-  try {
-    const out = execSync(`tasklist /FI "IMAGENAME eq ${name}" /NH`, { encoding: "utf8", windowsHide: true, timeout: 8000 });
-    return /\.exe/i.test(out);
-  } catch {
-    return false;
-  }
+  return proc.running(name);
 }
 
 /** Electron lockfile PID 查活（宽松解析：取首个 ≥2 位数字串；格式随 Electron 版本变，不依赖具体形状） */
@@ -68,12 +67,13 @@ function isRaccoonRunning() {
 /** 关闭全部相关进程并等待退出（默认 8s 超时；杀不掉返回 false，调用方中止切换）。
  *  等待只盯两个进程是否消失（lockfile 可能异常残留，不参与退出判定，避免 PID 复用误判拖死流程） */
 function killRaccoon(timeoutMs = 8000) {
-  if (process.platform !== "win32") return true;
-  // 先主客户端（/T 连带 Chromium 多进程树与子服务），再 ACP 运行时
-  for (const n of [PROC_MAIN, PROC_ACP]) {
-    try { execSync(`taskkill /F /IM "${n}" /T`, { encoding: "utf8", windowsHide: true, timeout: 8000 }); } catch { /* 可能已退出 */ }
-  }
+  // 不再对非 Windows 短路 return true：那是谎报成功，调用方会以为客户端已关而直接改
+  // auth.json，运行中的客户端一回写就把新账号覆盖掉。真没在跑时立刻返回 true，行为不变。
   const deadline = Date.now() + Math.max(1000, timeoutMs);
+  // 先主客户端（Windows 上 /T 连带 Chromium 多进程树与子服务），再 ACP 运行时
+  for (const n of [PROC_MAIN, PROC_ACP]) {
+    proc.kill(n, Math.max(1000, Math.ceil((deadline - Date.now()) / 2)), 0);
+  }
   while (Date.now() < deadline) {
     if (!procRunning(PROC_MAIN) && !procRunning(PROC_ACP)) return true;
     syncSleep(200);
@@ -83,7 +83,24 @@ function killRaccoon(timeoutMs = 8000) {
 
 /** 安装路径候选表 + 运行中进程反查（找不到返回空串，由调用方降级为"手动打开"提示） */
 function findRaccoonExe() {
-  if (process.platform !== "win32") return "";
+  if (process.platform !== "win32") {
+    // Linux/macOS：PATH 反查（进程名无 .exe）+ 常见安装目录；找不到返回空串由调用方降级
+    const stem = PROC_MAIN.replace(/\.exe$/i, "");
+    const p = proc.whichPath(stem) || proc.whichPath("raccoon-ai") || proc.whichPath("box-agent-acp");
+    if (p && fs.existsSync(p)) return p;
+    const home = os.homedir();
+    const cands = process.platform === "darwin"
+      ? [`/Applications/${stem}.app/Contents/MacOS/${stem}`]
+      : [
+        path.join("/opt", "raccoon-ai", stem),
+        path.join(home, ".local", "share", "raccoon-ai", stem),
+        path.join("/usr", "lib", "raccoon-ai", stem),
+      ];
+    for (const c of cands) {
+      try { if (fs.existsSync(c)) return c; } catch { /* 下一个 */ }
+    }
+    return "";
+  }
   const home = os.homedir();
   const localAppData = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
   const pf = process.env.ProgramFiles || "C:\\Program Files";

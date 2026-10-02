@@ -13,7 +13,7 @@ const ID = "codex";
 const NAME = "Codex";
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 function defaultDir() {

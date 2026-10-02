@@ -53,6 +53,7 @@ const net = require("node:net");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const { rmTempDir, sweepStale } = require("./temp-util.cjs");
+const osdirs = require("./osdirs.cjs");
 
 const CONV_DIR_NAME = "conversations";
 const LEGACY_SOURCE_ID = "antigravity-legacy";
@@ -87,15 +88,17 @@ const MIGRATION_SOURCES = [
 ];
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
+/** %APPDATA% / %LOCALAPPDATA% 展开：Linux 上映射到 XDG_CONFIG_HOME / XDG_DATA_HOME，
+ *  不能再拼出 ~/AppData/Roaming 那种必不存在的路径 */
 function expandExternal(p) {
   const s = String(p || "").trim();
   if (!s) return "";
   const home = homeDir();
-  const appdata = process.env.APPDATA || path.join(home, "AppData", "Roaming");
-  const localAppdata = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+  const appdata = osdirs.roaming();
+  const localAppdata = osdirs.local();
   const upper = s.toUpperCase();
   if (upper.startsWith("%APPDATA%")) return path.join(appdata, s.slice(9));
   if (upper.startsWith("%LOCALAPPDATA%")) return path.join(localAppdata, s.slice(14));

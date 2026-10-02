@@ -26,7 +26,7 @@ const NAME = "Reasonix";
 const STATS_FILE_RE = /^(\d{4})-(\d{2})-(\d{2})\.jsonl$/i;
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 /**

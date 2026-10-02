@@ -11,26 +11,29 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const osdirs = require("./osdirs.cjs");
 const { normalizeModel, providerName } = require("./adapter-zcode.cjs");
 
 const ID = "codebuddy";
 const NAME = "CodeBuddy";
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 /**
  * 候选数据根（按优先级）。环境变量供自测注入（reasonix 同款约定）；
  * 国际版实测目录为 %LOCALAPPDATA%\CodeBuddyExtension，国内版预留 CN 后缀候选。
+ * Linux 上走 XDG_DATA_HOME（~/.local/share）——与 proxy/discovery.cjs 的口径一致。
  */
 function candidateRoots() {
   const out = [];
   const env = String(process.env.CODEBUDDY_DATA_HOME || "").trim();
   if (env) out.push(path.resolve(env));
-  const localAppData = process.env.LOCALAPPDATA || path.join(homeDir(), "AppData", "Local");
-  out.push(path.join(localAppData, "CodeBuddyExtension"));
-  out.push(path.join(localAppData, "CodeBuddyExtension CN"));
+  for (const base of osdirs.localDirs()) {
+    out.push(path.join(base, "CodeBuddyExtension"));
+    out.push(path.join(base, "CodeBuddyExtension CN"));
+  }
   // 去重保序
   return [...new Set(out)];
 }

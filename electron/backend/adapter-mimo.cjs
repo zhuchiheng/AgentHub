@@ -24,7 +24,7 @@ const NAME = "Xiaomi MiMo";
 const PROVIDER = "小米 MiMo";
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 /** 数据目录（默认 ~/.local/share/mimocode） */

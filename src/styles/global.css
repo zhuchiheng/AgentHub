@@ -76,7 +76,12 @@
   /* 跟随光标的光池：比静态色块略亮一档，隔着玻璃才看得出来在动（液态玻璃增强后略再提一档） */
   --pool-a: rgba(68, 224, 127, 0.1);
   --pool-b: rgba(92, 157, 255, 0.09);
-  --font-ui: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, -apple-system, sans-serif;
+  /* 字体族按平台自然回落：win 命中 Segoe/Microsoft YaHei，mac 命中 PingFang，
+     Linux 落到 Noto Sans CJK / 文泉驿（多数发行版自带），都没有才用 system-ui。
+     补 Linux 候选是必要的：否则中文只能靠 fontconfig 兜底，不同发行版差异很大。 */
+  --font-ui: "Segoe UI", "Microsoft YaHei UI", "PingFang SC",
+    "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", "Source Han Sans SC",
+    system-ui, -apple-system, sans-serif;
   /* 全站统一字体：字体族只有 --font-ui 一套（就是左下角「渠道额度」面板用的那套）。
      --font-mono 保留为别名，让历史样式里的引用一并收敛过来，不再出现第二种字形；
      真正需要等宽对齐的内容（代码块 / diff / 路径与密钥输入框）显式走 --font-code，

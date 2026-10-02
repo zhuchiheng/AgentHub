@@ -40,7 +40,7 @@ const WORKER_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_FRAME_OUTPUT = 32 * 1024 * 1024;
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 function defaultDir() {
