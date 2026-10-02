@@ -9,13 +9,14 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const osdirs = require("./osdirs.cjs");
 const { normalizeModel } = require("./adapter-zcode.cjs");
 
 const ID = "raccoon";
 const NAME = "商汤小浣熊";
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 /** 数据目录（默认 ~/.box-agent） */
@@ -28,10 +29,16 @@ function sessionsDir(dir) {
   return path.join(dir, "sessions");
 }
 
-/** 设备标识文件（office-raccoon 桌面客户端目录） */
+/**
+ * 设备标识文件（office-raccoon 桌面客户端目录）。
+ * 跨平台逐个候选找：win %APPDATA%，linux ~/.config 或 ~/.local/share。
+ */
 function deviceIdentityFile() {
-  const appData = process.env.APPDATA || path.join(homeDir(), "AppData", "Roaming");
-  return path.join(appData, "office-raccoon", "desktop-device-identity.json");
+  for (const base of osdirs.roamingDirs().concat(osdirs.localDirs())) {
+    const p = path.join(base, "office-raccoon", "desktop-device-identity.json");
+    if (fs.existsSync(p)) return p;
+  }
+  return path.join(osdirs.roaming(), "office-raccoon", "desktop-device-identity.json");
 }
 
 function detect() {

@@ -10,7 +10,7 @@ const ID = "zcode";
 const NAME = "ZCode";
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 /** 数据目录（默认 ~/.zcode） */

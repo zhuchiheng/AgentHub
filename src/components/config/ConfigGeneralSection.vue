@@ -342,7 +342,8 @@ onUnmounted(() => {
       <div class="set-row">
         <div class="set-info">
           <div class="set-name">开机自启</div>
-          <div class="set-desc">{{ isPortable ? "便携版不支持开机自启（注册的会是临时副本）" : "登录 Windows 后自动运行 AgentHub，改动即时生效" }}</div>
+          <!-- 文案不写死平台名：Linux 上写 ~/.config/autostart/*.desktop，Windows 写注册表，行为一致 -->
+          <div class="set-desc">{{ isPortable ? "便携版不支持开机自启（注册的会是临时副本）" : "登录后自动运行 AgentHub，改动即时生效" }}</div>
         </div>
         <el-tooltip :content="'便携版不支持开机自启'" :disabled="!isPortable" placement="top">
           <div

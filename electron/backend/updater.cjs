@@ -9,8 +9,13 @@ const config = require("./config.cjs");
 
 const GITHUB_REPO_URL = "https://github.com/HUIdada1/AgentHub";
 const GITHUB_RELEASES_URL = GITHUB_REPO_URL + "/releases";
-// latest.yml 在每个 Release 里都有，latest 直链永远指最新版，不用调 API 也不用担心限流
-const LATEST_YML_URL = GITHUB_RELEASES_URL + "/latest/download/latest.yml";
+// latest.yml 在每个 Release 里都有，latest 直链永远指最新版，不用调 API 也不用担心限流。
+// 文件名按平台区分（electron-builder 产物命名规则），否则 Linux 上会去解析 Windows 的 yml。
+const LATEST_YML_FILE =
+  process.platform === "linux" ? "latest-linux.yml"
+    : process.platform === "darwin" ? "latest-mac.yml"
+      : "latest.yml";
+const LATEST_YML_URL = GITHUB_RELEASES_URL + "/latest/download/" + LATEST_YML_FILE;
 const FIRST_CHECK_DELAY_MS = 60 * 1000; // 启动一分钟后再查，避开启动高峰
 const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 每小时一次
 const MANUAL_COOLDOWN_MS = 30 * 1000;
@@ -41,6 +46,9 @@ let onTrayRefresh = null; // 状态一变就刷新托盘菜单（更新提示条
 
 function isPortable() {
   if (process.env.PORTABLE_EXECUTABLE_DIR) return true;
+  // AppImage 与便携版同语义：单文件免安装、挂载路径随机、无法原地覆盖更新，
+  // 更新流程只能提示手动下载替换（跟 config.cjs 的判定保持一致）
+  if (process.platform === "linux" && process.env.APPIMAGE) return true;
   // 与 sync-config.cjs 同口径：exe 同目录放 portable.flag 手动开启便携模式，
   // 不然手动便携副本会走 electron-updater 自动更新路径（更新的是被当便携用的副本）
   try {

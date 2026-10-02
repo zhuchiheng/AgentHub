@@ -21,28 +21,34 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
+const osdirs = require("./osdirs.cjs");
 const { normalizeModel } = require("./adapter-zcode.cjs");
 
 const ID = "opensquilla";
 const NAME = "OpenSquilla";
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
-function appDataDir() {
-  return process.env.APPDATA || path.join(homeDir(), "AppData", "Roaming");
+/** 候选应用数据根（跨平台）：win %APPDATA%\@opensquilla，linux ~/.config 或 ~/.local/share */
+function candidateRoots() {
+  const env = String(process.env.OPEN_SQUILLA_HOME || "").trim();
+  if (env) return [path.resolve(env)];
+  return osdirs.candidateRoots(["@opensquilla"]).map((r) => path.join(r, "desktop-electron", "opensquilla"));
 }
 
 /** 应用数据 home（settings committed.json 的 home 字段指向这里） */
 function defaultRoot() {
-  return path.join(appDataDir(), "@opensquilla", "desktop-electron", "opensquilla");
+  return candidateRoots()[0];
 }
 
-/** 自测注入环境变量覆盖（临时目录隔离，不触碰真实数据） */
+/** 自测注入环境变量覆盖（临时目录隔离，不触碰真实数据），否则取首个真实存在的候选 */
 function resolveRoot() {
-  const env = String(process.env.OPEN_SQUILLA_HOME || "").trim();
-  return env ? path.resolve(env) : defaultRoot();
+  for (const root of candidateRoots()) {
+    if (fs.existsSync(dbFile(root))) return root;
+  }
+  return defaultRoot();
 }
 
 function dbFile(root) {

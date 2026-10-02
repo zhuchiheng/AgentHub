@@ -1529,6 +1529,10 @@ function raccoonIdentity(account) {
   return {
     deviceId: meta.deviceId || uuid,
     deviceName: meta.deviceName || "DESKTOP-" + seed.slice(0, 7).toUpperCase().replace(/[^A-Z0-9]/g, "X"),
+    // ⚠️ 这里是**刻意伪装**成 Windows 桌面客户端，不是漏改的平台判断：
+    // 上游按 client_platform / os_version / device_name 做客户端校验，
+    // Linux 上如实上报 desktop-linux-x64 会被判为不受支持的客户端。
+    // 移植时不要顺手改成 process.platform，那会直接把这条链路打断。
     osVersion: meta.osVersion || "10.0.26200",
     platform: meta.clientPlatform || "desktop-windows-x64",
     platformNoArch: String(meta.clientPlatform || "desktop-windows-x64").replace(/-(x64|arm64)$/i, ""),

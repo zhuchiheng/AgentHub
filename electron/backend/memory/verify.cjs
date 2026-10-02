@@ -34,14 +34,25 @@ function resolveBridge(appPath, resourcesPath) {
 }
 
 function resolveHostExe(appPath) {
-  if (appPath && fs.existsSync(appPath) && /\.exe$/i.test(appPath)) return appPath;
-  // 开发环境（electron.exe 起 dev）：退回主程序 exe 的常见安装位置探测
-  const candidates = [
-    appPath,
-    path.join(process.env.LOCALAPPDATA || "", "Programs", "AgentHub", "AgentHub.exe"),
-    path.join(process.env.ProgramFiles || "C:\\Program Files", "AgentHub", "AgentHub.exe"),
-  ].filter(Boolean);
-  for (const c of candidates) if (fs.existsSync(c)) return c;
+  // Windows 靠 .exe 扩展名判定；Linux/macOS 的可执行文件通常没有扩展名，
+  // 用扩展名判断会让「明明存在的主程序」被判成不合法而继续走候选表。
+  const isHost = (p) => !!p && fs.existsSync(p) && (process.platform === "win32" ? /\.exe$/i.test(p) : true);
+  if (isHost(appPath)) return appPath;
+  // 开发环境 / 未拿到路径：按平台探测常见安装位置
+  const candidates = process.platform === "win32"
+    ? [
+      appPath,
+      path.join(process.env.LOCALAPPDATA || "", "Programs", "AgentHub", "AgentHub.exe"),
+      path.join(process.env.ProgramFiles || "C:\\Program Files", "AgentHub", "AgentHub.exe"),
+    ].filter(Boolean)
+    : process.platform === "darwin"
+      ? ["/Applications/AgentHub.app/Contents/MacOS/AgentHub"]
+      : [
+        "/opt/AgentHub/agenthub",
+        "/usr/lib/agenthub/agenthub",
+        "/usr/bin/agenthub",
+      ];
+  for (const c of candidates) if (isHost(c)) return c;
   return appPath || null;
 }
 

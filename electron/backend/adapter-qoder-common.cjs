@@ -17,7 +17,7 @@ const path = require("node:path");
 const { normalizeModel, providerName } = require("./adapter-zcode.cjs");
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 /** 时间戳兼容读取：毫秒 / 秒 / ISO 字符串；无法解析返回 null（同 codebuddy 约定） */

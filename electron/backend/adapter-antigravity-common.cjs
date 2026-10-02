@@ -20,7 +20,7 @@ const path = require("node:path");
 const { rmTempDir, sweepStale, openReadOnly } = require("./temp-util.cjs");
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 /** 非负有限数字，非法返回 0（db 层 safeToken 之外的适配器侧兜底） */

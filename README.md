@@ -46,13 +46,14 @@ AgentHub 是一个**本地运行**的中控台（Electron + Vue 3 + TypeScript�
 
 ### 系统要求
 
-- Windows 10 / 11（x64）
+- Windows 10 / 11（x64）：Setup 安装版或 portable 便携版
+- Linux（x64，AppImage）：主流桌面发行版即可，建议先装 `libsecret`（否则密码会降级明文存储）
 - 不需要预装 Node、浏览器等任何依赖，运行时已打包在内
 - 部分能读到数据的工具需要本机登录过对应客户端（如用量统计要读 Codex、Trae 的本地库）
 
 ### 数据、更新与备份
 
-- 所有配置与数据都存在 `%APPDATA%\AgentHub`，卸载程序不会删除它
+- 所有配置与数据都在用户配置目录下：Windows 为 `%APPDATA%\AgentHub`，Linux 为 `~/.config/AgentHub`，卸载程序不会删除它
 - 自动更新：默认**每小时**检查一次 GitHub Releases，检测到新版本会在侧栏设置齿轮和「设置 · 通用」的更新按钮上冒红点；自动检查可在「设置 · 通用」关闭
 - 左下角「设置」= 全局项（通用 / WebDAV 同步 / 同步时间 / 数据与备份）；每个板块右上角还有一个「配置」按钮，管的是这个板块自己的设置
 

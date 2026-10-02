@@ -21,15 +21,25 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const sqlcipher = require("./sqlcipher.cjs");
+const osdirs = require("./osdirs.cjs");
 const { normalizeModel, providerName } = require("./adapter-zcode.cjs");
 const { rmTempDir, sweepStale } = require("./temp-util.cjs");
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
-function appDataDir() {
-  return process.env.APPDATA || path.join(homeDir(), "AppData", "Roaming");
+/**
+ * 候选应用数据根（按优先级）。
+ * Windows 沿用 %APPDATA%\<AppName>；Linux 上 Electron 系应用可能落在
+ * ~/.config/<AppName> 或 ~/.local/share/<AppName>，两处都要试。
+ */
+function candidateRoots(appDirName, envKey) {
+  const out = [];
+  const env = String(process.env[envKey] || "").trim();
+  if (env) out.push(path.resolve(env));
+  out.push(...osdirs.candidateRoots([appDirName]));
+  return [...new Set(out)];
 }
 
 /** 非负有限数字，非法返回 0（db 层 safeToken 之外的适配器侧兜底） */
@@ -44,14 +54,22 @@ function num(v) {
  * 返回标准适配器契约 { id, name, detect, validate, getDeviceId, extract }。
  */
 function makeTraeAdapter(id, name, appDirName, envKey) {
-  /** 应用数据根（%APPDATA%\<appDirName>） */
+  /** 应用数据根（env 注入优先，否则平台候选中的首选） */
   function defaultRoot() {
-    return path.join(appDataDir(), appDirName);
+    return candidateRoots(appDirName, envKey)[0];
   }
 
+  /**
+   * 解析数据根：env 注入时直接用它；否则**逐个候选试**，返回首个真实含
+   * database.db 的根（Linux 上 .config / .local/share 两处都可能存在）。
+   */
   function resolveRoot() {
     const env = String(process.env[envKey] || "").trim();
-    return env ? path.resolve(env) : defaultRoot();
+    if (env) return path.resolve(env);
+    for (const root of candidateRoots(appDirName, envKey)) {
+      if (fs.existsSync(dbFile(root))) return root;
+    }
+    return defaultRoot();
   }
 
   /** 数据库文件路径 */

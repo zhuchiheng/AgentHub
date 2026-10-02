@@ -5,12 +5,19 @@
 // 读取路径：koffi FFI 打开加密库 → sqlcipher_export 导出到内存明文库 → 句柄交给
 //   适配器直接查询（不走 node:sqlite，因为 node:sqlite 无 SQLCipher 支持且
 //   无法打开别人已 attach 的内存库——同一连接内完成全部查询）。
-// DLL 位置：开发环境在 <项目根>/resources/sqlcipher/；打包后经 extraResources
-//   落在 process.resourcesPath/sqlcipher/。libcrypto/libssl 为其依赖，须同目录。
+//
+// 原生库位置（按平台分子目录，避免 Linux 包里塞 Windows PE）：
+//   win32  resources/sqlcipher/            sqlcipher.dll + libcrypto-1_1-x64.dll + libssl-1_1-x64.dll
+//   linux  resources/sqlcipher-linux-x64/  libsqlcipher.so.0（OpenSSL 已静态链入，无外部依赖）
+//   打包后落在 process.resourcesPath/<同名目录>；开发时回落到项目根 resources/。
+//   构建脚本见 tools/linux/build-sqlcipher.sh。
+//
+// 版本约束：Linux 侧必须编译 SQLCipher 4.6.1（与 Windows DLL 同版本）。raw key 模式下
+//   不改 cipher_compatibility，完全依赖默认参数；跨大版本会导致明明密钥正确却报
+//   "file is not a database"。
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
-const koffi = require("koffi");
 
 // Trae 系 SQLCipher 硬编码密钥（raw key，64 hex；全量用户统一，非机器派生）
 const TRAE_DB_KEY = "3605f6691095a993f03d5009c918352ef5be31ae31e8f000212b81ff058da773";
@@ -18,28 +25,91 @@ const TRAE_DB_KEY = "3605f6691095a993f03d5009c918352ef5be31ae31e8f000212b81ff058
 let lib = null;
 let loadError = null;
 
-/** 定位 sqlcipher.dll：打包后 resourcesPath，开发环境项目根 resources/ */
-function dllDir() {
-  const candidates = [];
-  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, "sqlcipher"));
-  candidates.push(path.join(__dirname, "..", "..", "resources", "sqlcipher"));
-  for (const dir of candidates) {
-    if (fs.existsSync(path.join(dir, "sqlcipher.dll"))) return dir;
+/**
+ * 候选目录名（按优先级）。
+ * 旧包只有 "sqlcipher" 一个目录；Linux 包用 "sqlcipher-linux-<arch>" 与 Windows 隔开。
+ */
+function dirNames() {
+  if (process.platform === "win32") return ["sqlcipher"];
+  if (process.platform === "linux") {
+    return [`sqlcipher-linux-${process.arch}`, "sqlcipher-linux", "sqlcipher"];
+  }
+  return [`sqlcipher-${process.platform}-${process.arch}`, "sqlcipher"];
+}
+
+/** 主库文件名（按优先级）：Linux 优先带 SONAME 的真实库，win 固定 dll */
+function mainLibNames() {
+  if (process.platform === "win32") return ["sqlcipher.dll"];
+  if (process.platform === "darwin") return ["libsqlcipher.dylib"];
+  return ["libsqlcipher.so.0", "libsqlcipher.so"];
+}
+
+/**
+ * 需要先 dlopen 的依赖库（存在才加载）。
+ * Windows 的 sqlcipher.dll 动态依赖 OpenSSL 1.1，且加载顺序敏感，必须预载；
+ * Linux 侧构建时已把 libcrypto 静态链入，故通常没有依赖，但保留扩展位。
+ */
+function depLibNames() {
+  if (process.platform === "win32") {
+    return ["libcrypto-1_1-x64.dll", "libssl-1_1-x64.dll"];
+  }
+  return ["libcrypto.so.3", "libssl.so.3", "libcrypto.so.1.1", "libssl.so.1.1"];
+}
+
+/** 候选根目录：打包后 resourcesPath，开发环境项目根 resources/ */
+function baseDirs() {
+  const bases = [];
+  if (process.resourcesPath) bases.push(process.resourcesPath);
+  bases.push(path.join(__dirname, "..", "..", "resources"));
+  return bases;
+}
+
+/** 定位含原生库的目录；找不到返回 null */
+function libDir() {
+  for (const base of baseDirs()) {
+    for (const name of dirNames()) {
+      const dir = path.join(base, name);
+      for (const f of mainLibNames()) {
+        if (fs.existsSync(path.join(dir, f))) return dir;
+      }
+    }
   }
   return null;
 }
 
-/** 懒加载 DLL（含 libcrypto/libssl 依赖预载，Windows 加载顺序敏感） */
+/** 懒加载原生库（含依赖预载） */
 function ensureLib() {
   if (lib) return lib;
   if (loadError) throw loadError;
   try {
-    const dir = dllDir();
-    if (!dir) throw new Error("未找到 sqlcipher.dll（resources/sqlcipher 缺失）");
-    // 先加载 OpenSSL 依赖，再加载 sqlcipher 本体
-    koffi.load(path.join(dir, "libcrypto-1_1-x64.dll"));
-    koffi.load(path.join(dir, "libssl-1_1-x64.dll"));
-    const dll = koffi.load(path.join(dir, "sqlcipher.dll"));
+    // koffi 惰性 require：该模块被 sync-adapter.cjs 在加载期整表 require，
+    // 顶层 require 一旦失败会连带整个应用起不来。这里把失败半径收回到 SQLCipher 本身。
+    const koffi = require("koffi");
+
+    const dir = libDir();
+    if (!dir) {
+      throw new Error(
+        `未找到 SQLCipher 原生库（已查找 ${baseDirs().map((b) => path.join(b, dirNames()[0])).join(" / ")}）`,
+      );
+    }
+
+    // 先加载依赖，再加载主库（Windows 加载顺序敏感）
+    for (const dep of depLibNames()) {
+      const p = path.join(dir, dep);
+      if (fs.existsSync(p)) koffi.load(p);
+    }
+
+    let mainLib = null;
+    for (const name of mainLibNames()) {
+      const p = path.join(dir, name);
+      if (fs.existsSync(p)) {
+        mainLib = p;
+        break;
+      }
+    }
+    if (!mainLib) throw new Error(`SQLCipher 目录缺少主库：${dir}`);
+
+    const dll = koffi.load(mainLib);
 
     // 一次性声明全部需要的 C 函数（koffi.func(lib, name, retType, [argTypes])）
     lib = {
@@ -64,13 +134,23 @@ function ensureLib() {
   }
 }
 
-/** 该环境是否可用 SQLCipher（DLL 存在且可加载） */
+/** 该环境是否可用 SQLCipher（原生库存在且可加载、密钥可解） */
 function available() {
   try {
     ensureLib();
     return true;
   } catch {
     return false;
+  }
+}
+
+/** 不可用时给上层的原因（用于日志/UI 提示），可用时返回 null */
+function unavailableReason() {
+  try {
+    ensureLib();
+    return null;
+  } catch (e) {
+    return String((e && e.message) || e);
   }
 }
 
@@ -158,4 +238,4 @@ function queryAll(db, sql) {
   return rows;
 }
 
-module.exports = { available, open, close, queryAll, TRAE_DB_KEY };
+module.exports = { available, unavailableReason, open, close, queryAll, TRAE_DB_KEY };

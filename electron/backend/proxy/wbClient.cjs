@@ -20,6 +20,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execSync, spawn } = require("node:child_process");
+const proc = require("./proc.cjs");
 
 /** 渠道 → 客户端显示名 + 进程/可执行文件名（双区共用一个 auth 目录，只能靠这两样区分） */
 const WB_CLIENTS = {
@@ -41,15 +42,13 @@ function syncSleep(ms) {
   }
 }
 
-/** tasklist 单进程探测：命中输出含 ".exe"，未命中输出中文提示（兜底输出乱码也不影响判定） */
+/**
+ * 单进程探测（跨平台：Windows 走 tasklist，Unix 走 pgrep）。
+ * 注意：这里**不能**对非 Windows 直接 return false —— 那会让切号流程永远认为客户端没在跑，
+ * 于是跳过「先关客户端」这一步，运行中的客户端一回写就把新账号覆盖成旧账号。
+ */
 function procRunning(name) {
-  if (process.platform !== "win32") return false;
-  try {
-    const out = execSync(`tasklist /FI "IMAGENAME eq ${name}" /NH`, { encoding: "utf8", windowsHide: true, timeout: 8000 });
-    return /\.exe/i.test(out);
-  } catch {
-    return false;
-  }
+  return proc.running(name);
 }
 
 /** 指定渠道的客户端是否在运行（只看自己那一份进程，双区互不牵连） */
@@ -66,27 +65,10 @@ function isWorkbuddyRunning(channel) {
  * 强杀那趟也会对已退出的项报错——这些是预期噪音，漏到主进程 stderr 上只会刷屏。
  */
 function killWorkbuddy(channel, timeoutMs = 8000) {
-  if (process.platform !== "win32") return true;
-  const name = clientOf(channel).exe;
-  const total = Math.max(1000, timeoutMs);
-  const quiet = { encoding: "utf8", windowsHide: true, timeout: 8000, stdio: ["ignore", "ignore", "ignore"] };
-  if (procRunning(name)) {
-    // ① 优雅退出：向窗口发关闭请求，让编辑器保存/询问未保存内容
-    try { execSync(`taskkill /IM "${name}" /T`, quiet); } catch { /* 可能已退出 */ }
-    const softDeadline = Date.now() + Math.min(3000, total);
-    while (Date.now() < softDeadline) {
-      if (!procRunning(name)) return true;
-      syncSleep(200);
-    }
-    // ② 强杀（连带 Chromium 多进程树）
-    try { execSync(`taskkill /F /IM "${name}" /T`, quiet); } catch { /* 可能已退出 */ }
-  }
-  const deadline = Date.now() + total;
-  while (Date.now() < deadline) {
-    if (!procRunning(name)) return true;
-    syncSleep(200);
-  }
-  return !procRunning(name);
+  // 不再对非 Windows 短路 return true：那等于谎报成功，调用方会以为客户端已关
+  // 而直接改登录文件，运行中的客户端一回写就把新账号覆盖掉。
+  // 真没在跑时 proc.kill 立刻返回 true，行为与原先一致。
+  return proc.kill(clientOf(channel).exe, timeoutMs, 3000);
 }
 
 /** 注册表 Uninstall 项的 DisplayIcon 全量取值（可能为空行 / 带 ",0" 图标索引 / 带引号）。
@@ -134,8 +116,26 @@ function exeCandidates(channel) {
 
 /** 定位客户端可执行文件（找不到返回空串，由调用方降级为「手动关闭/打开」提示） */
 function findWorkbuddyExe(channel) {
-  if (process.platform !== "win32") return "";
   const exe = clientOf(channel).exe;
+  const stem = exe.replace(/\.exe$/i, "");
+  if (process.platform !== "win32") {
+    // Linux/macOS：PATH 反查 + 常见安装目录（找不到返回空串，调用方降级为提示手动操作）
+    const p = proc.whichPath(stem) || proc.whichPath(stem.toLowerCase());
+    if (p && fs.existsSync(p)) return p;
+    const home = os.homedir();
+    const cands = process.platform === "darwin"
+      ? [`/Applications/${stem}.app/Contents/MacOS/${stem}`, path.join(home, "Applications", `${stem}.app`, "Contents", "MacOS", stem)]
+      : [
+        path.join("/opt", "WorkBuddy", stem),
+        path.join("/opt", stem, stem.toLowerCase()),
+        path.join(home, ".local", "share", "WorkBuddy", stem),
+        path.join("/usr", "lib", "workbuddy", stem.toLowerCase()),
+      ];
+    for (const c of cands) {
+      try { if (fs.existsSync(c)) return c; } catch { /* 下一个 */ }
+    }
+    return "";
+  }
   // ① 运行中进程反查（一次调用拿全部同名进程路径，取第一个存在的）
   try {
     const out = execSync(

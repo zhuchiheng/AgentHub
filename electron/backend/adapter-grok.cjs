@@ -21,7 +21,7 @@ const NAME = "Grok";
 const PROVIDER = "xAI";
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 function defaultDir() {

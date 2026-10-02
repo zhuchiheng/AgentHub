@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const osdirs = require("./osdirs.cjs");
 
 // Electron app（主进程）；纯 Node 脚本直跑（tools 自测等）时为 null
 let electronApp = null;
@@ -17,9 +18,16 @@ try {
   /* 非 Electron 环境 */
 }
 
-/** 便携版是临时解压目录，开机自启注册的路径退出即失效（自启开关要在设置页禁用） */
+/**
+ * 便携版是临时解压目录，开机自启注册的路径退出即失效（自启开关要在设置页禁用）。
+ * AppImage 同理：它每次运行都挂载到 /tmp/.mount_<随机>/，写进 autostart 的 Exec
+ * 路径下一开机就指向不存在的目录；且无法原地覆盖更新。因此一并按便携版处理——
+ * UI 上「便携版不支持开机自启 / 请手动下载替换」的说法对 AppImage 同样成立。
+ */
 function isPortable() {
-  return !!process.env.PORTABLE_EXECUTABLE_DIR;
+  if (process.env.PORTABLE_EXECUTABLE_DIR) return true;
+  if (process.platform === "linux" && process.env.APPIMAGE) return true;
+  return false;
 }
 
 // WebDAV 密码用系统级密钥加密落盘（safeStorage 不可用就降级明文）。
@@ -46,11 +54,12 @@ function decryptSecret(stored) {
   }
 }
 
-/** 数据目录：Electron 用 userData（%APPDATA%\AgentHub，目录名由 main.cjs 的 setName 决定）；
- *  纯 Node 环境退回 %APPDATA%\AgentHub（无则用户主目录），保证脚本直跑与主进程读同一份配置。
+/** 数据目录：Electron 用 userData（Windows 为 %APPDATA%\AgentHub，Linux 为 ~/.config/AgentHub，
+ *  目录名由 main.cjs 的 setName 决定）；纯 Node 环境按平台惯例退回同名目录，
+ *  保证脚本直跑与主进程读同一份配置（Linux 上不能再拼 ~/AppData/Roaming 那种假路径）。
  *  AGENTHUB_DATA_DIR 显式指定时始终优先：自测脚本的沙箱钩子（不设即无感，生产零影响） */
 function dataDir() {
-  const dir = process.env.AGENTHUB_DATA_DIR || (electronApp ? electronApp.getPath("userData") : path.join(process.env.APPDATA || os.homedir(), "AgentHub"));
+  const dir = process.env.AGENTHUB_DATA_DIR || (electronApp ? electronApp.getPath("userData") : path.join(osdirs.roaming(), "AgentHub"));
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }

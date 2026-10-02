@@ -1,3 +1,9 @@
 # 更新说明文件必须 LF：CI 检出 CRLF 会让 js-yaml 把 releaseNotes 输出成单行双引号标量，
 # LF 则输出标准多行块标量（客户端解析更稳）
 build/release-notes.md text eol=lf
+
+# Linux 侧的构建/验证脚本必须 LF：CRLF 的 .sh 在 Linux 上会直接报
+# "bad interpreter: /bin/bash^M"，而这个脚本恰恰只在 Linux 容器/主机里执行。
+# 不设全局 * text=auto：那会把全仓库已有文件重新规范化，产生大规模无意义 diff。
+tools/linux/*.sh text eol=lf
+tools/linux/*.py text eol=lf

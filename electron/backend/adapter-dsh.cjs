@@ -38,7 +38,7 @@ const FLOW_SITE = "direct";
 const WORKER_TIMEOUT_MS = 5 * 60 * 1000;
 
 function homeDir() {
-  return process.env.USERPROFILE || process.env.HOME || ".";
+  return osdirs.home();
 }
 
 function defaultDir() {
