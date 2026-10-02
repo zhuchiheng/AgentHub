@@ -5,6 +5,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
+const osdirs = require("./osdirs.cjs");
 
 const ID = "zcode";
 const NAME = "ZCode";

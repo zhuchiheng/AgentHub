@@ -18,6 +18,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { normalizeModel } = require("./adapter-zcode.cjs");
 const { openReadOnly } = require("./temp-util.cjs");
+const osdirs = require("./osdirs.cjs");
 
 const ID = "mimo";
 const NAME = "Xiaomi MiMo";

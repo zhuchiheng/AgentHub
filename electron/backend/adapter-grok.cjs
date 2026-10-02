@@ -15,6 +15,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { normalizeModel } = require("./adapter-zcode.cjs");
+const osdirs = require("./osdirs.cjs");
 
 const ID = "grok";
 const NAME = "Grok";

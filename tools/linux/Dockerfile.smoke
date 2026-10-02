@@ -1,0 +1,36 @@
+# AgentHub Linux 无头冒烟镜像
+#
+# 用途：在没有显示器的环境（CI / 容器）里真正把 Electron 应用跑起来，
+# 验证「主进程初始化 → 建窗 → 加载页面 → 后端模块 boot」这条链路。
+# 光构建成功说明不了应用能启动——这个镜像补的正是这一段。
+#
+# 构建（仓库根）：
+#   docker build -f tools/linux/Dockerfile.smoke -t agenthub-smoke .
+# 运行：
+#   docker run --rm -v "$PWD:/src" agenthub-smoke bash tools/linux/run-headless.sh
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Electron 运行时依赖 + Xvfb（无头显示）+ dbus（托盘/通知要走会话总线）
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+      curl ca-certificates xz-utils \
+      # --- Electron/Chromium 运行时 ---
+      libnss3 libgtk-3-0 libnotify4 libsecret-1-0 libgbm1 libasound2 \
+      libxss1 libxtst6 libxrandr2 libx11-xcb1 libxcomposite1 libxdamage1 \
+      libxfixes3 libxkbcommon0 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+      libdrm2 libpango-1.0-0 libcairo2 libatspi2.0-0 \
+      # --- 无头显示与调试 ---
+      xvfb x11-utils dbus-x11 \
+      # --- 构建（npm ci 可能需要编译原生模块）---
+      cmake build-essential python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y -qq nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+# 先只拷依赖清单，让 npm ci 这一层可被缓存
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
