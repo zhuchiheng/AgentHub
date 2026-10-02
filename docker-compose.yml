@@ -1,0 +1,32 @@
+# AgentHub Web 版（容器部署）
+#
+# 启动：docker compose up -d
+# 访问：http://<宿主机>:9528
+#
+# 端口：
+#   9528  Web 控制台
+#   9527  反代网关（OpenAI 兼容），把 AI 客户端的 base_url 指到这里，
+#         用量明细就由网关自己记账，不需要挂载任何本机目录
+#
+# 数据：全部落在 ./data（容器内 /root/.agenthub-server），含配置、用量库、号池、记忆仓库
+services:
+  agenthub:
+    build: .
+    image: agenthub-web
+    container_name: agenthub
+    restart: unless-stopped
+    ports:
+      - "9528:9528"   # Web 控制台
+      - "9527:9527"   # 反代网关（可选暴露；只在容器内用就注释掉）
+    environment:
+      AGENTHUB_WEB_PORT: "9528"
+      AGENTHUB_WEB_HOST: "0.0.0.0"
+      # 留空 = 不鉴权。部署到非可信网络时务必设置一个长随机串：
+      # AGENTHUB_WEB_TOKEN: "换成你的随机口令"
+    volumes:
+      - ./data:/root/.agenthub-server
+    # 如需读取本机 AI 客户端的历史用量明细，取消下面注释挂载工作机目录。
+    # 注意：仅同构 Linux 宿主机有意义；Windows/macOS 的 Docker 挂载不转发文件事件，
+    # 自动感知收纳会失效，且 I/O 明显偏慢。走反代网关时不需要挂载。
+    # - ~/.config:/root/.config:ro
+    # - ~/.local/share:/root/.local/share:ro

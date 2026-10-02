@@ -42,6 +42,46 @@ function isElectron(): boolean {
   return typeof window !== "undefined" && !!window.agenthub;
 }
 
+// ===== Web 模式探测 =====
+// 浏览器里有两种非 Electron 场景，必须分开：
+//   ① npm run dev:web —— vite 预览 UI，没有后端，只能走 mock
+//   ② server/index.cjs —— 真正的 Web 服务端（容器部署），走 /api/invoke
+// 用一次 /api/health 探测区分，结果缓存（每个标签页只探一次）。
+// 注意：不能只看 fetch 成功——vite dev server 对未知路径会回退 index.html 并返回 200，
+// 必须校验响应体确实是我们的健康检查结构。
+let webModePromise: Promise<boolean> | null = null;
+
+function isWebServer(): Promise<boolean> {
+  if (typeof window === "undefined" || isElectron()) return Promise.resolve(false);
+  if (!webModePromise) {
+    webModePromise = fetch("/api/health", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => !!(d && typeof d === "object" && (d as { ok?: unknown }).ok === true && typeof (d as { commands?: unknown }).commands === "number"))
+      .catch(() => false);
+  }
+  return webModePromise;
+}
+
+/** Web 服务端调用：与 Electron 同样的「ok:false 转异常」约定，业务代码无感 */
+async function callHttp<T>(cmd: string, args: Record<string, unknown> | undefined): Promise<T> {
+  const res = await fetch("/api/invoke", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cmd, args: toPlain(args) || {} }),
+  });
+  let out: unknown;
+  try {
+    out = await res.json();
+  } catch {
+    throw new Error(`命令 ${cmd} 返回非 JSON（HTTP ${res.status}）：服务端可能未启动或接口路径不对`);
+  }
+  if (out && typeof out === "object" && (out as { ok?: unknown }).ok === false) {
+    const msg = (out as { message?: unknown }).message;
+    throw new Error(typeof msg === "string" && msg ? msg : `命令 ${cmd} 执行失败`);
+  }
+  return out as T;
+}
+
 // ipcRenderer.invoke 走 structuredClone，Vue 的深层响应式 Proxy 会直接抛
 // "An object could not be cloned"，这里统一脱壳，各接口不必再自行深拷贝
 function toPlain<T>(v: T): T {
@@ -78,7 +118,10 @@ async function call<T>(cmd: string, args?: Record<string, unknown>, timeoutMs: n
     }
     return res as T;
   }
-  // 浏览器回退：直接走 mock
+  // 非 Electron：先看有没有 Web 服务端（容器部署），有就走 HTTP；没有才是 dev:web 预览的 mock
+  if (await isWebServer()) {
+    return await invokeWithTimeout(callHttp<T>(cmd, args), cmd, timeoutMs);
+  }
   return (await mock.invoke(cmd, args)) as T;
 }
 
@@ -105,9 +148,28 @@ export const installUpdate = () => call<UpdateStatus>("install_update");
 export const openReleasePage = () => call<void>("open_release_page");
 export const openRepoPage = () => call<void>("open_repo_page");
 
-/** 订阅主进程广播（更新状态 / WebDAV 进度 / focus-update 跳转信号），返回退订函数 */
+/** 订阅主进程广播（更新状态 / WebDAV 进度 / 同步进度 / 网关事件），返回退订函数 */
 export function onUpdateEvent(cb: (payload: unknown) => void): (() => void) | undefined {
-  return window.agenthub?.onUpdateEvent?.((payload) => cb(payload));
+  if (typeof window === "undefined") return undefined;
+  if (isElectron()) return window.agenthub?.onUpdateEvent?.((payload) => cb(payload));
+  // Web 服务端：后端广播经 SSE 下发。这里只把 payload 交给回调，
+  // 与 Electron 侧 onUpdateEvent 的语义保持一致（事件名在 payload.event 里）。
+  let es: EventSource | null = null;
+  isWebServer().then((web) => {
+    if (!web) return; // dev:web 预览没有后端，静默不订阅
+    es = new EventSource("/api/events");
+    es.onmessage = (ev) => {
+      try {
+        const frame = JSON.parse(ev.data) as { channel?: string; payload?: unknown };
+        cb(frame.payload);
+      } catch {
+        /* 坏帧忽略 */
+      }
+    };
+  });
+  return () => {
+    if (es) es.close();
+  };
 }
 
 // ===== 技能仓库：WebDAV 跨设备同步 =====
