@@ -10,7 +10,8 @@
 | 项目 | 状态 |
 |---|---|
 | Linux 构建（npm ci → vue-tsc → electron-builder --linux） | ✅ 已在 ubuntu:22.04 容器内跑通 |
-| AppImage 产物 | ✅ 已产出 |
+| AppImage 产物 | ✅ 已产出 `AgentHub-1.40.1.AppImage` |
+| **无头启动（真跑起来）** | ✅ Xvfb 内启动，CDP 确认页面已加载 |
 | Trae 四源（SQLCipher FFI） | ✅ **解禁**，非降级 |
 | Windows 构建 | ✅ 未受影响（本机重新验证过逻辑分支） |
 | arm64 | ⏸ 配置位已留，未构建 |
@@ -185,7 +186,41 @@ UI 上「便携版不支持开机自启 / 请手动下载替换」的说法对 A
 
 ---
 
-## 8. 已知限制与后续项
+## 8. 无头启动验证（能跑起来 ≠ 能构建）
+
+构建成功说明不了应用能启动。用 Xvfb 在容器里真跑一遍，三层判定：
+
+```bash
+docker build -f tools/linux/Dockerfile.smoke -t agenthub-smoke .
+docker run --rm -v "$PWD:/src" agenthub-smoke bash -c \
+  'cd /src && tar --exclude=node_modules --exclude=.git -cf - . | (cd /app && tar xf -) \
+   && bash tools/linux/run-headless.sh'
+```
+
+- ① 主进程 25s 后仍存活（崩溃会立刻退出）
+- ② 日志无 `Uncaught Exception` / `Cannot find module` 等致命错误
+   （放行 dbus/GPU 这类无头环境必然出现的噪音）
+- ③ 经 CDP（`--remote-debugging-port`）拿到页面且 title 非空 —— 证明窗口建了、页面加载了
+
+实测结果：`title: 'AgentHub · Agent中控台'`，url 指向 `app.asar/dist/index.html`。
+dbus 连接失败是无头环境的正常噪音，不影响功能。
+
+### 这一步当场抓到一个致命 bug
+
+首轮冒烟报 `ReferenceError: osdirs is not defined`（`adapter-zcode.cjs`）。
+原因是批量迁移脚本先替换了 `homeDir` 函数体，文本里因此已出现 "osdirs"，
+随后的「是否需要插入 require」判断被这个子串骗过，**9 个适配器全部漏了引入**。
+
+后果：`main.cjs` 的 `whenReady` 里 `ensureLocalDeviceId → homeDir` 抛错，
+整个 Promise 链断掉，**窗口根本没建起来**。而 vue-tsc、vite build、`node --check`
+全部通过（语法合法，运行时才炸）。
+
+已修复并做全局复检。同时把这个验证固化进 `.github/workflows/linux-smoke.yml`，
+在 PR 改动 `electron/**`、`src/**`、`package.json` 时自动跑，防同类回归。
+
+> 教训：这类「批量文本替换」必须配运行时验证，只做语法检查等于没检查。
+
+## 9. 已知限制与后续项
 
 1. **arm64 未构建**：需 `resources/sqlcipher-linux-arm64/`（同一脚本在 arm64 环境跑一遍即可）
    与 arm64 runner（如 `ubuntu-22.04-arm`）。配置位已按 `sqlcipher-linux-${process.arch}` 预留。
@@ -194,6 +229,7 @@ UI 上「便携版不支持开机自启 / 请手动下载替换」的说法对 A
    AppImage 无法声明 deb 依赖，建议在设置页给一次明确提示。
 3. **托盘**：Linux 桌面环境碎片化（GNOME 需 AppIndicator 扩展），`tray.png` 仅 32×32，
    深色主题下对比度未验证。真机上需实测。
-4. **未做真机 GUI 验证**：容器内无显示环境，只验证了构建与后端路径（osdirs / sqlcipher）。
-   首次交付前应在真实桌面环境过一遍启动、托盘、更新检查。
+4. **仍建议做一次真机 GUI 验证**：无头冒烟证明了「主进程 + 建窗 + 页面加载」这条链路，
+   但**托盘图标、通知、开机自启、更新安装**这几项依赖真实桌面环境（GNOME/KDE 的
+   AppIndicator、会话总线、XDG autostart），容器里验证不了，首次交付前需人工过一遍。
 5. `src/api/mock.ts` 里仍有 `C:\...` 路径，仅 web 预览的 mock 数据，不影响打包产物。
