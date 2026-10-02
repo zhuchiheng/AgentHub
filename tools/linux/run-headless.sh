@@ -8,12 +8,13 @@
 #   ③ 渲染进程就绪：通过 CDP（--remote-debugging-port）拿到页面列表，
 #      确认窗口已创建且页面 title 正确 —— 这才证明 Vue 应用真的挂载了
 #
-# 用法（容器内）：
-#   bash tools/linux/run-headless.sh
+# 用法：
+#   容器内：bash tools/linux/run-headless.sh        （默认 /app）
+#   CI/本机：APP_DIR=$PWD bash tools/linux/run-headless.sh
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
-APP_DIR=/app
+APP_DIR="${APP_DIR:-/app}"
 LOG=/tmp/agenthub-headless.log
 DEBUG_PORT=9222
 WAIT_START=25   # 给主进程 boot + 建窗 + 加载页面的时间（容器内首启动偏慢）

@@ -1,0 +1,47 @@
+# Linux 无头冒烟：在没有显示器的环境里真正把应用跑起来。
+#
+# 为什么要单独跑这个：构建成功 ≠ 应用能启动。移植时踩过一次——
+# 批量改脚本漏了 require，主进程 whenReady 里抛 ReferenceError，窗口根本没建起来；
+# 而 vue-tsc、vite build、node --check 全都通过（语法合法，运行时才炸）。
+# 只有真启动才抓得到这类问题。
+#
+# 判定三层，任一失败即红：主进程存活 / 无致命日志 / CDP 拿到已加载的页面。
+name: Linux 无头冒烟
+
+on:
+  pull_request:
+    paths:
+      - "electron/**"
+      - "src/**"
+      - "package.json"
+      - "tools/linux/**"
+      - ".github/workflows/linux-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装 Electron 运行时依赖与 Xvfb
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libnss3 libgtk-3-0 libnotify4 libsecret-1-0 libgbm1 libasound2 \
+            libxss1 libxtst6 libxrandr2 libx11-xcb1 libxcomposite1 libxdamage1 \
+            libxfixes3 libxkbcommon0 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+            libdrm2 libpango-1.0-0 libcairo2 libatspi2.0-0 \
+            xvfb x11-utils dbus-x11
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 无头启动验证
+        # 脚本内部会跑 前端构建 → electron-builder --dir → Xvfb 启动 → 三层判定
+        run: APP_DIR="$PWD" bash tools/linux/run-headless.sh
