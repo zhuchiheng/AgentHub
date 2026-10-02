@@ -8,6 +8,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { normalizeModel, providerName } = require("./adapter-zcode.cjs");
+const osdirs = require("./osdirs.cjs");
 
 const ID = "codex";
 const NAME = "Codex";

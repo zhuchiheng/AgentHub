@@ -15,6 +15,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { normalizeModel, providerName } = require("./adapter-zcode.cjs");
+const osdirs = require("./osdirs.cjs");
 
 function homeDir() {
   return osdirs.home();

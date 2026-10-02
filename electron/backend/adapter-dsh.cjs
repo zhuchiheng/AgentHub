@@ -27,6 +27,7 @@ const { DatabaseSync } = require("node:sqlite");
 const { normalizeModel, providerName } = require("./adapter-zcode.cjs");
 const crashlog = require("./crashlog.cjs");
 const { rmTempDir, sweepStale } = require("./temp-util.cjs");
+const osdirs = require("./osdirs.cjs");
 
 const ID = "dsh";
 const NAME = "DeepSeek Harness";
