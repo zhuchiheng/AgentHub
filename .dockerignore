@@ -1,0 +1,9 @@
+node_modules
+release
+dist
+.git
+.github
+.vscode
+*.log
+# 桌面端产物与 Windows 原生库不进 Web 镜像（resources 下只保留 linux 的 .so）
+resources/sqlcipher
