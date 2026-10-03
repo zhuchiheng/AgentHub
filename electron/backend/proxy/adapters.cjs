@@ -2067,7 +2067,13 @@ const zcode = {
         headers["X-Aliyun-Captcha-Verify-Param"] = String(pendingCap.verifyParam);
         if (pendingCap.region) headers["X-Aliyun-Captcha-Verify-Region"] = String(pendingCap.region);
       }
-      const payload = zcodeAnthropic.toAnthropic(this.mapModel(model), body);
+      const upstreamModel = this.mapModel(model);
+      // Anthropic 协议必填 max_tokens：客户端（如 WorkBuddy）不传时，用官方客户端元数据表里
+      // 该模型的上限兜底（GLM-5.3-Flash = 128000），避免被写死的 8192 硬截断成长回答 MAX_TOKENS
+      const zmeta = zcodeLocal.resolveModelMeta(upstreamModel);
+      const payload = zcodeAnthropic.toAnthropic(upstreamModel, body, {
+        defaultMaxTokens: zmeta && zmeta.maxOutputTokens,
+      });
       // 官方客户端检测：zcode-plan 端点要求 system 以官方 ZCode 提示词开头，否则返回 405/3012
       // unusual activity（见 zcodeOfficialSystem.cjs）。coding-plan 走另一上游，无需注入。
       if (plan === "start-plan") payload.system = zcodeOfficialSystem.injectOfficialZcodeSystem(payload.system);
