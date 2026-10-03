@@ -1,0 +1,95 @@
+# CI：只做自测与门禁，不发版。
+#
+# 与 release.yml 的分工：
+#   - release.yml：手动 dispatch，校验版本号 → 构建 → 发布 Release（会创建 tag，不可撤回）
+#   - 本文件：每次 push / PR 自动跑，只验证「能不能合、能不能编、测试过不过」，无任何写操作
+#
+# 三个 job 互相独立（可并行）：
+#   1) conflict-check：与上游 main **以及所有其它开放 PR** 的合并冲突检测（纯 git，Linux 跑，秒级）
+#   2) build：vue-tsc 类型检查 + vite 构建
+#   3) selftest：代理层离线自测（用仓库内 electron 当 Node 跑）
+#
+# ⚠️ 本文件只在**你自己的 fork** 上生效。上游仓库没有这个 workflow，
+#    因此上游 PR 页面不会显示这些检查——它的用途是「推 PR 前先自己验一遍」。
+#    这也意味着：不会因为多了这个文件而影响你提交给上游的 PR（前提是别把它带进 PR 分支）。
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# 只读权限：本 workflow 不写仓库、不发 Release
+permissions:
+  contents: read
+
+# 同一分支的新 push 会取消上一次未跑完的检查
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conflict-check:
+    name: 合并冲突检测（上游 main + 开放 PR）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 冲突检测要算合并基，需要完整历史；
+          # PR 事件下默认 checkout 的是"合并提交"，这里显式取分支头，否则测的是合并结果而非本分支
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 冲突检测
+        # 脚本自己会补 upstream remote 并 fetch；
+        # 判定只认 merge-tree 输出里的 CONFLICT 关键字（按输出行数判断会把冲突全部误判为可合并）
+        # token 仅用于列出上游开放 PR（公开仓库匿名也能查，但会被限流到 60 次/小时）
+        run: node tools/ci/conflict-check.cjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: 类型检查与前端构建
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        # .npmrc 里的 npmmirror 镜像在 CI 生效；若 Electron 二进制下载失败（镜像未同步），
+        # 可临时移除 .npmrc 重试
+        run: npm ci
+
+      - name: 类型检查与构建（vue-tsc 门禁）
+        run: npm run build
+
+  selftest:
+    name: 代理层自测
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        # 自测需要 electron：仓库内自测脚本要求用 Electron 的 Node 运行
+        # （系统 Node 缺 node:sqlite，且加密实现在 Electron 运行时里）
+        run: npm ci
+
+      - name: 运行离线自测
+        # run-selftests.cjs 负责找到 electron 并以 ELECTRON_RUN_AS_NODE=1 当 Node 用；
+        # 联网探针默认关闭，不会碰真机登录态（脚本内部已沙箱化 APPDATA/ZCODE_V2_DIR）
+        run: node tools/ci/run-selftests.cjs
