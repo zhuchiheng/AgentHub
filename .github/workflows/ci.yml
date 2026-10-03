@@ -33,16 +33,20 @@ concurrency:
 jobs:
   conflict-check:
     name: 合并冲突检测（上游 main + 开放 PR）
-    runs-on: ubuntu-latest
+    # 钉 ubuntu-24.04 而非 ubuntu-latest：后者 2026-10-19 起迁往 Ubuntu 26（runner-images#14748），
+    # 钉住可保证「昨天绿今天红」不会因为 runner 镜像漂移而发生
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      # action 用 v5（runs.using = node24）：v4 跑在 Node 20 上，GitHub 会报
+      # "Node.js 20 is deprecated" 警告
+      - uses: actions/checkout@v5
         with:
           # 冲突检测要算合并基，需要完整历史；
           # PR 事件下默认 checkout 的是"合并提交"，这里显式取分支头，否则测的是合并结果而非本分支
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -58,9 +62,9 @@ jobs:
     name: 类型检查与前端构建
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -77,9 +81,9 @@ jobs:
     name: 代理层自测
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
