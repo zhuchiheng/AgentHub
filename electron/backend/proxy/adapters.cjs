@@ -2001,14 +2001,18 @@ const zcode = {
     return {
       ok: true,
       models: ids.map((id) => {
-        // 模态优先取官方客户端自带的能力表（modelConfigRules 正则最后匹配），
-        // 取不到再退回通用嗅探；仍无信号则不声明 images
-        const fmt = zcodeLocal.resolveModelInputFormat(id);
+        // 模态与上限都优先取官方客户端自带的元数据表（modelConfigRules；逐属性取最后定义值），
+        // 取不到再退回通用嗅探/保守默认——别再硬编码 131072/8192（实测真实值为 1000000/128000，
+        // 硬编码曾把长回答卡在 8192 造成 MAX_TOKENS 截断）
+        const meta = zcodeLocal.resolveModelMeta(id);
+        const fmt = (meta && meta.inputFormat) || null;
         const img = fmt && typeof fmt.supportsImage === "boolean" ? fmt.supportsImage : sniffImages(id);
         const caps = capsWithImages(img, { reasoning: true, tools: true });
         if (fmt && typeof fmt.supportsVideo === "boolean") caps.video = fmt.supportsVideo;
         if (fmt && typeof fmt.supportsPdf === "boolean") caps.pdf = fmt.supportsPdf;
-        return { id, name: id, rate: null, capabilities: caps, contextLength: 131072, maxOutputTokens: 8192 };
+        const ctx = (meta && meta.contextWindow) || 131072;
+        const maxOut = (meta && meta.maxOutputTokens) || 8192;
+        return { id, name: id, rate: null, capabilities: caps, contextLength: ctx, maxOutputTokens: maxOut };
       }),
     };
   },
@@ -2470,8 +2474,14 @@ function mergedModels(cfg) {
       if (entry.rate == null && meta.rate != null && !Number.isNaN(Number(meta.rate))) entry.rate = Number(meta.rate);
       // images 走 OR（任一来源支持即支持），避免单渠道的 false 污染共享模型名；其余能力沿用后者覆盖
       entry.capabilities = mergeCapabilities(entry.capabilities, meta.capabilities);
-      if (!entry.contextLength && meta.contextLength) entry.contextLength = Number(meta.contextLength) || 0;
-      if (!entry.maxOutputTokens && meta.maxOutputTokens) entry.maxOutputTokens = Number(meta.maxOutputTokens) || 0;
+      // 数值上限取各来源的**最大声明**：渠道的占位值不得压低另一渠道的真实声明。
+      // 例：Trae 的目录不返回限额、对所有模型一律 131072，而 GLM-5.3 的真实窗口是 1000000
+      // （workbuddy / workbuddy_ai / zcode 均如此声明），按"先到先得"会被 Trae 顶成 131072。
+      // 这两个字段只用于 /v1/models 展示，请求路径各适配器用自己的 meta 兜底，故取最大值安全。
+      const ctxN = Number(meta.contextLength) || 0;
+      if (ctxN > entry.contextLength) entry.contextLength = ctxN;
+      const outN = Number(meta.maxOutputTokens) || 0;
+      if (outN > entry.maxOutputTokens) entry.maxOutputTokens = outN;
     }
   }
 
