@@ -184,9 +184,68 @@ function isChannelBlock(e) {
   return isWafBlock(e) || /\b11128\b/.test(String((e && e.message) || ""));
 }
 
+// ===== IP 级限流识别（渠道级，不罚号） =====
+// 与 isChannelBlock 的分工：
+//   isChannelBlock：单次响应里的**字面证据**（WAF 页 / 11128）→ 一锤定音
+//   本机制：单次响应看不出，但**多账号在短窗口内对同一模型集体限流** → 行为模式推断
+//
+// 为什么需要行为判据（来源：dwgx/WindsurfAPI 3060★ 项目的实测 FAQ）：
+//   「一开就"所有账号 rate-limited"，怀疑代理坏了 → 大概率是 IP 级冷却，不是账号问题
+//     也不是代理问题。上游会对**同一出口 IP + 同一模型**的密集请求施加 cooldown，
+//     多个账号绑在同一出口时会一起被限流。」
+//   单看任何一个账号的 429，都与「账号级限流」完全同形，无法区分——只有跨账号观察才能识别。
+//
+// 正确反应（与账号级 429 的关键区别）：
+//   账号级：冷却该号 → 换号重试
+//   IP 级：**不罚任何号**（号没问题），渠道×模型整体让位 + 返回 429 带 Retry-After
+//   理由：多号集体中招恰恰说明号没问题，逐个冷却会把好号全部烧掉却解决不了问题。
+
+/** IP 语义字面判据：错误文案里出现出口 IP 相关的限流语义（判据 A，置信度高） */
+const IP_RATE_RE = /\bip\b[\s_-]*(limit|block|ban|cooldown|throttl)|too many requests from|from (this|your) ip|access denied.*ip|ip.*rate.?limit|出口\s*ip|同一\s*ip/i;
+function isIpRateLiteral(e) {
+  const text = String((e && e.message) || "") + " " + String((e && e.body) || "");
+  return IP_RATE_RE.test(text);
+}
+
+/** 行为判据窗口与阈值（判据 B）：同渠道+同模型，60s 内 ≥2 个**不同账号**都吃到限流 */
+const IP_RATE_WINDOW_MS = 60000;
+const IP_RATE_MIN_ACCOUNTS = 2;
+// `${channel}:${model}` → { accounts:Set<accId>, first, last }
+const ipRateHits = new Map();
+
+/** 记录一次限流命中，返回是否达到 IP 级判据（跨账号集体限流） */
+function noteIpRateHit(channel, model, accId) {
+  const key = `${channel}:${String(model || "").toLowerCase()}`;
+  const now = Date.now();
+  const cur = ipRateHits.get(key);
+  // 窗口过期则重开一轮（避免历史命中永久累积）
+  const rec = cur && now - cur.last < IP_RATE_WINDOW_MS ? cur : { accounts: new Set(), first: now, last: now };
+  rec.accounts.add(String(accId || ""));
+  rec.last = now;
+  ipRateHits.set(key, rec);
+  // 定期清扫，防渠道×模型组合长期累积（渠道数有限但模型多）
+  if (ipRateHits.size > 500) {
+    for (const [k, v] of ipRateHits) if (now - v.last > IP_RATE_WINDOW_MS * 5) ipRateHits.delete(k);
+  }
+  return rec.accounts.size >= IP_RATE_MIN_ACCOUNTS;
+}
+
+/** 命中 IP 级后清空该键，避免同一轮持续触发降级（降级已生效，重复调用只会叠加 streak） */
+function clearIpRateHit(channel, model) {
+  ipRateHits.delete(`${channel}:${String(model || "").toLowerCase()}`);
+}
+
+/** 该错误是否属于 IP 级限流（字面判据 A 或行为判据 B）。仅在**限流类**错误上调用——
+ *  非限流错误（5xx/参数/凭证）即使多账号同时失败也不是 IP 限流语义 */
+function isIpLevelRate(e, channel, model, accId) {
+  if (isIpRateLiteral(e)) return { hit: true, by: "literal" };
+  if (noteIpRateHit(channel, model, accId)) return { hit: true, by: "behavior" };
+  return { hit: false };
+}
+
 /** 可触发渠道降级的错误类别：上游/余额/限流/凭证类。400 参数 / 11101 参数 / 11115 超长 /
  *  4001 模型配置类不降级——换渠道也救不了，罚渠道是冤枉 */
-const DEGRADABLE = new Set(["credit", "rate", "server", "relogin", "model_rate", "model_blocked", "not_found"]);
+const DEGRADABLE = new Set(["credit", "rate", "server", "relogin", "model_rate", "model_blocked", "not_found", "ip_rate"]);
 
 // ===== 渠道健康状态机：normal → degraded（降级，流量走备选）→ 半开（到期重获资格）→ 正常/再降级 =====
 // 内存态不落库（本机流量调度状态；重启后首请求撞一次墙即自愈重建）。streak 驱动指数退避防震荡
@@ -717,6 +776,24 @@ async function handleChat(req, res, settings) {
               break;
             }
             const cls = classifyUpstream(e, false);
+            // IP 级限流判定（仅对限流类错误做，非限流错误即使多号同时失败也不是 IP 语义）：
+            //   判据 A 字面（错误文案含出口 IP 限流语义）→ 一锤定音
+            //   判据 B 行为（同渠道+同模型 60s 内 ≥2 个不同账号都限流）→ 集体中招即 IP 级
+            // 命中则**不罚号**（号没问题），改渠道级降级让位；见 isIpLevelRate 注释
+            if ((cls.kind === "rate" || cls.kind === "model_rate") && acc && acc.id) {
+              const ip = isIpLevelRate(e, chan, targetModel, acc.id);
+              if (ip.hit) {
+                clearIpRateHit(chan, targetModel);
+                degradeChannel(chan, `IP 级限流（${ip.by === "literal" ? "上游明示" : "多账号同模型集体 429"}）`, settings);
+                store.noteError(acc.id, String(e.message || "IP 级限流"));
+                lastErr = Object.assign(new Error(`渠道 ${chan} 触发 IP 级限流，已降级跳备选渠道（不罚账号）`), {
+                  status: 429,
+                  retryAfterMs: cls.resetMs ? Math.max(0, cls.resetMs - Date.now()) : 0,
+                });
+                degradedHere = "ip-rate";
+                break;
+              }
+            }
             // 无明示重置时间的 429：上游多为 1~3s 短窗限流，退避 1s 重试一次再落冷却换号
             // （参考项目 RetrySame 语义）；有墙钟/Retry-After 的 429 重试必白费，直接冷却。
             // 单号池场景下这一跳决定 429 是就地消化还是直接抛给客户端
@@ -966,4 +1043,7 @@ function status() {
   };
 }
 
-module.exports = { start, stop, stopAsync, status, channelHealthSnapshot, classifyUpstream };
+module.exports = { start, stop, stopAsync, status, channelHealthSnapshot, classifyUpstream,
+  // 供自测校验 IP 级限流识别（字面判据 / 行为判据 / 不误判）
+  isIpRateLiteral, noteIpRateHit, isIpLevelRate, clearIpRateHit,
+  IP_RATE_WINDOW_MS, IP_RATE_MIN_ACCOUNTS };

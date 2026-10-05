@@ -360,6 +360,85 @@ function openaiError(message, type, code) {
   return { error: { message: String(message), type: type || "server_error", param: null, code: code || null } };
 }
 
+/**
+ * 软错误判据（HTTP 200 但语义是失败）。
+ *
+ * 为什么需要：上游把业务错误藏在「看起来成功」的响应里是这类渠道的通病，形态有三类：
+ *   ① 200 + JSON 错误体：`{error:{code,message}}` / `{code:N≠0, message}` / `{success:false}`
+ *   ② 200 + SSE 流首的 `event:error` 帧（LobsterAI 实测；ccLoad 项目称之为 "soft-error detection"）
+ *   ③ 200 + 空内容但带异常 finish_reason
+ * 各适配器原本**各自实现**这套判据（adapters.cjs 的 raccoon / trae 段、qoderAdapter 的信封层、
+ * zcodeAnthropic 的错误事件），代码重复且**覆盖不均**——新渠道接入时容易整段漏掉
+ * （LobsterAI 就是实测踩到后补的）。
+ *
+ * 设计边界（有意为之）：
+ *   · **只抽「判据」，不抽「解析」**——流首窥探、信封解包、SSE 形态都是渠道特有的，
+ *     硬抽一层通用解析会退化成一堆 `if (channel === ...)`，反而更难维护。
+ *     故各适配器仍自己取数据，取到后调用本函数**统一判据与错误语义**。
+ *   · **不引入新的错误分类**：返回的 status 直接喂给 server 的 classifyUpstream，
+ *     复用既有 kind 表（402→credit / 429→rate / 401→relogin / 其余→server）。
+ *   · **纯函数**：无渠道知识、无副作用、无 IO，可直接单测各种畸形体。
+ *
+ * @param {object} body 已解析的响应对象（各适配器自行 parseJson / 解包后传入）
+ * @param {object} [opts]
+ * @param {number} [opts.httpStatus] 原始 HTTP 状态（默认 200；非 2xx 时本函数不判定）
+ * @param {number[]} [opts.quotaCodes] 该渠道的额度耗尽业务码（如 raccoon 1000007 / zcode 1005）
+ * @param {number[]} [opts.authCodes] 该渠道的凭证失效业务码（如 401 / 1006 / 3012 / 200003）
+ * @param {number[]} [opts.rateCodes] 该渠道的限流业务码（如 trae 4008 / workbuddy 4008）
+ * @returns {{isSoftError:boolean, code:number, message:string, status:number, planLimit:boolean}}
+ *   非软错误时 isSoftError=false，其余字段为占位（调用方不应读取）。
+ */
+function classifySoftError(body, opts) {
+  const o = opts || {};
+  const none = { isSoftError: false, code: 0, message: "", status: 0, planLimit: false };
+  const httpStatus = Number(o.httpStatus) || 200;
+  // 非 2xx 由 fetchStream/httpJson 层处理，不在此判定（避免双重判定）
+  if (httpStatus < 200 || httpStatus >= 300) return none;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return none;
+
+  const quotaCodes = new Set((o.quotaCodes || []).map(Number));
+  const authCodes = new Set((o.authCodes || []).map(Number));
+  const rateCodes = new Set((o.rateCodes || []).map(Number));
+
+  // ① 取错误对象与业务码：兼容 {error:{...}} 与顶层 {code,message} 两种形态
+  const errObj = (body.error && typeof body.error === "object") ? body.error : null;
+  const hasChoices = Array.isArray(body.choices) && body.choices.length > 0;
+  // 有 choices 的正常响应体：仅当同时带 error 对象时才算软错误
+  const rawCode = errObj ? errObj.code : body.code;
+  const code = Number(rawCode) || 0;
+  const message = String(
+    (errObj && (errObj.message || errObj.msg)) ||
+    body.message || body.msg || body.errorMessage || ""
+  );
+
+  // 显式失败标志（部分上游用 {success:false} / {ok:false}）
+  const explicitFail = body.success === false || body.ok === false;
+
+  // 判据：有 error 对象 / 业务码非 0 且非成功码（200/0/1 常见成功哨兵）/ 显式失败标志
+  // 注意：带 choices 的响应若 code 为成功哨兵，不算软错误（正常流式帧也带 choices）
+  const codeIsFailure = code !== 0 && code !== 200 && code !== 1;
+  const isSoftError = !!errObj || explicitFail || (codeIsFailure && !hasChoices) || (codeIsFailure && !!errObj);
+  if (!isSoftError) return none;
+
+  // ② 语义映射（复用既有分类口径，不新增 kind）
+  const msg = message;
+  const isQuota = quotaCodes.has(code) ||
+    /insufficient|credit|quota|balance|积分|余额|欠费|额度|recharge|exhausted/i.test(msg);
+  const isAuth = authCodes.has(code) ||
+    /unauthorized|token.*(expire|invalid)|invalid.*token|not active|凭证|登录态|重新登录/i.test(msg);
+  const isRate = rateCodes.has(code) || code === 429 ||
+    /rate.?limit|too many requests|限流|请求过于频繁/i.test(msg);
+
+  const status = isQuota ? 402 : isAuth ? 401 : isRate ? 429 : (Number(o.defaultStatus) || 502);
+  return {
+    isSoftError: true,
+    code,
+    message: msg || `上游错误 ${code || "unknown"}`,
+    status,
+    planLimit: isQuota,
+  };
+}
+
 /** 请求体验证：messages/model 缺失返回 OpenAI 同构 400 */
 function validateChatBody(body) {
   if (!body || typeof body !== "object") return "请求体必须是 JSON 对象";
@@ -439,4 +518,6 @@ module.exports = {
   isCompleteJson, parseRetryAfterHeaders, stableConvId, promptCacheKey,
   isDeepSeekModel, injectThinking, normalizeReasoningEffort, backfillReasoningContent,
   SseScanner, stripEmptyDelta, hasConsumableDelta, chunk, DONE, Aggregator, openaiError, validateChatBody, normalizeRoles, estimateTokens,
+  // 软错误判据（HTTP 200 但语义失败）：各适配器取到响应后统一调用，避免重复实现与遗漏
+  classifySoftError,
 };

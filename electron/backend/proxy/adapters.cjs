@@ -596,11 +596,16 @@ const trae = {
           emit({ type: "finish", reason: data.finish_reason || data.finishReason || "stop" });
         } else if (ev === "error") {
           // code:1005 = 积分不足 PlanLimit；4008 = 限流；4001 = 模型配置问题（不罚号，交由分类器处理）
+          // 两个修复在此处交汇，缺一不可：
+          //   · sawError（fix/empty-stream）：标记「上游已明确报错」，让下方空流判定让位——
+          //     否则 4001/4008 这类明确错误会被降级成空流 502，号池按错误类型处理就失效了。
+          //   · classifySoftError（feat/ip-level-cooldown）：软错误判据通用化，
+          //     渠道特有码表经 opts 传入，不再各适配器手写一份。
           sawError = true;
-          const code = Number(data.code) || 0;
-          if (code === 1005) result.planLimit = true;
-          const status = code === 1005 ? 402 : code === 4008 ? 429 : 502;
-          emit({ type: "error", status, code, message: data.message || data.msg || `上游错误 ${code}` });
+          const se = util.classifySoftError(data, { quotaCodes: [1005], rateCodes: [4008], defaultStatus: 502 });
+          const code = se.code;
+          if (se.planLimit) result.planLimit = true;
+          emit({ type: "error", status: se.status, code, message: se.message || `上游错误 ${code}` });
         }
         // metadata / timing_cost / extra_info 忽略
       });
@@ -1281,12 +1286,12 @@ function makeWorkBuddy(channelId) {
           // 402 积分耗尽（insufficient credits）以错误体形式出现；4008 = 模型级限流。
           // 必须置 result.planLimit：只 emit error 的话 server 侧换号分支认不到，
           // 该账号既不冷却也不换号，请求被记 200 成功，下次还会继续选中这个已耗尽的号
-          if (data.error) {
-            const codeNum = Number(data.error.code) || 0;
-            const msgStr = String(data.error.message || "");
-            const status = codeNum === 402 || /insufficient|credit|quota|balance/i.test(msgStr) ? 402 : codeNum === 4008 ? 429 : 502;
-            if (status === 402) result.planLimit = true;
-            emit({ type: "error", status, code: codeNum, message: msgStr || "insufficient credits" });
+          // 判据统一走 util.classifySoftError —— 顺带修掉旧实现只查 data.error 的盲区：
+          // 上游若把错误放在顶层 {code:402,message:…}（无 error 对象），旧代码会漏判并当正常帧放行
+          const se = util.classifySoftError(data, { quotaCodes: [402], rateCodes: [4008], defaultStatus: 502 });
+          if (se.isSoftError) {
+            if (se.planLimit) result.planLimit = true;
+            emit({ type: "error", status: se.status, code: se.code, message: se.message || "insufficient credits" });
             return;
           }
           const choice = Array.isArray(data.choices) && data.choices[0];
@@ -1776,16 +1781,16 @@ const raccoon = {
         }
         if (raw === "[DONE]") { emit({ type: "finish", reason: "" }); return; }
         const data = parseJson(raw);
-        if (!data) return;
+        // 非对象帧一律丢弃：上游可能夹字面量 null / 数组 / 裸字符串（JSON.parse 得 null 后访问
+        // .choices 会抛 TypeError，整条流以内部异常中断）。`!data` 只挡 falsy，
+        // 故显式判类型，覆盖 [] / "abc" / 123 这类 truthy 非对象值
+        if (!data || typeof data !== "object" || Array.isArray(data)) return;
         // 错误体：上游失败可能在流内返回 {error:{code,message}} 或 {code:1000007,...}（会话3 §6.1）
-        const errObj = data.error || null;
-        const codeNum = Number((errObj && errObj.code) ?? (data.choices ? 0 : data.code)) || 0;
-        const msgStr = String((errObj && errObj.message) || data.message || "");
-        if (errObj || (codeNum && codeNum !== 0 && codeNum !== 200)) {
-          const isQuota = codeNum === 1000007 || /insufficient|credit|quota|balance|积分|余额|欠费/i.test(msgStr);
-          const status = isQuota ? 402 : codeNum === 401 || codeNum === 200003 ? 401 : codeNum === 429 ? 429 : 502;
-          if (isQuota) result.planLimit = true;
-          emit({ type: "error", status, code: codeNum, message: msgStr || `上游错误 ${codeNum}` });
+        // 判据统一走 util.classifySoftError（渠道码表通过 opts 传入）
+        const se = util.classifySoftError(data, { quotaCodes: [1000007], authCodes: [401, 200003], defaultStatus: 502 });
+        if (se.isSoftError) {
+          if (se.planLimit) result.planLimit = true;
+          emit({ type: "error", status: se.status, code: se.code, message: se.message || `上游错误 ${se.code}` });
           return;
         }
         const choice = Array.isArray(data.choices) && data.choices[0];
