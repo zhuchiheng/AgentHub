@@ -49,11 +49,17 @@ services:
       # 网关对外接入地址里的 host（给 AI 客户端填的那个地址）。
       # 不设时：浏览器访问控制台会自动用地址栏的 host 推导（多数情况够用）；
       # 但用 CLI/脚本读 API 拿到的会是 127.0.0.1，此时建议显式指定 NAS 的 IP 或域名。
-      # AGENTHUB_PUBLIC_HOST: "192.168.1.172"
+      # 换成你自己的 NAS 地址；用域名/反代的话填那个域名
+      AGENTHUB_PUBLIC_HOST: "192.168.1.172"
     volumes:
-      # 全部数据（配置 / 用量库 / 号池 / 记忆仓库 / 网关统计）落 NAS
+      # 全部数据（配置 / 用量库 / 号池 / 记忆仓库 / 网关统计）落 NAS。
+      # 相对路径在 NAS 上即 /volume1/docker/AgentHub/data（= Z:\AgentHub\data）
       - ./data:/data
-      # 时区文件：让容器内时间与 NAS 一致（TZ 之外的双保险）
+      # 时区文件：让容器内时间与宿主一致（TZ 之外的双保险）。
+      # 注意各发行版路径不同：群晖是 /etc/TZ，多数 Linux 是 /etc/localtime。
+      # 挂一个**不存在**的路径会让容器直接起不来，所以这里只挂 localtime，
+      # 群晖用户若报 mount 错误，把它改成 `- /etc/TZ:/etc/TZ:ro` 或直接删掉这行
+      # （镜像里已用 TZ 环境变量 + tzdata 设好时区，这行只是双保险）。
       - /etc/localtime:/etc/localtime:ro
       # 如需读取本机 AI 客户端的历史用量明细，取消注释（仅同构 Linux 宿主机有意义）
       # - ~/.config:/root/.config:ro
