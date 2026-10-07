@@ -68,9 +68,12 @@ function loadPersisted() {
       keyChangeAt: Number(s.keyChangeAt) || 0, // 统一密码改动时间：早于它的历史包全部重打
       uploadedAnchorHash: typeof s.uploadedAnchorHash === "string" ? s.uploadedAnchorHash : "", // 锚定指纹上传记账（内容未变不重传）
       uploadedAnchorFor: typeof s.uploadedAnchorFor === "string" ? s.uploadedAnchorFor : "",
+      // 共享配置（模型映射 + API Key）记账：appliedAt 做 LWW 判定，hash 做「内容未变不重传」
+      sharedAppliedAt: Number(s.sharedAppliedAt) || 0,
+      sharedHash: typeof s.sharedHash === "string" ? s.sharedHash : "",
     };
   } catch {
-    return { lastSyncAt: 0, uploadedHash: "", uploadedFor: "", merged: {}, keyChangeAt: 0, uploadedAnchorHash: "", uploadedAnchorFor: "" };
+    return { lastSyncAt: 0, uploadedHash: "", uploadedFor: "", merged: {}, keyChangeAt: 0, uploadedAnchorHash: "", uploadedAnchorFor: "", sharedAppliedAt: 0, sharedHash: "" };
   }
 }
 
