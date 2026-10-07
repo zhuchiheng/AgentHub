@@ -18,6 +18,15 @@ FROM ubuntu:22.04 AS build
 WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 
+# apt 源换成国内镜像：实测 archive.ubuntu.com 单次响应要 13 秒，
+# 阿里云 0.76 秒（快 17 倍）。apt-get update 要拉几十个索引，用官方源会卡到超时。
+# 构建参数留了开关：海外环境可 --build-arg APT_MIRROR=archive.ubuntu.com 换回官方源。
+ARG APT_MIRROR=mirrors.aliyun.com
+RUN set -eux; \
+    if [ "$APT_MIRROR" != "archive.ubuntu.com" ]; then \
+      sed -i "s|http://archive.ubuntu.com/ubuntu|http://${APT_MIRROR}/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://${APT_MIRROR}/ubuntu|g" /etc/apt/sources.list; \
+    fi
+
 # cmake/g++：koffi 无预编译包时需要本地编译（Trae 系数据源的 SQLCipher FFI 依赖它）
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
       curl ca-certificates cmake g++ make python3 \
@@ -45,11 +54,22 @@ ENV DEBIAN_FRONTEND=noninteractive \
     AGENTHUB_DATA_MOUNT=/data \
     TZ=Asia/Shanghai
 
-# tzdata 让 TZ 生效；libsecret 对应 safeStorage（缺了 WebDAV 密码会降级明文存储）
+# 同阶段 1：走国内镜像源（实测官方源单次响应 13s，阿里云 0.76s）
+ARG APT_MIRROR=mirrors.aliyun.com
+RUN set -eux; \
+    if [ "$APT_MIRROR" != "archive.ubuntu.com" ]; then \
+      sed -i "s|http://archive.ubuntu.com/ubuntu|http://${APT_MIRROR}/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://${APT_MIRROR}/ubuntu|g" /etc/apt/sources.list; \
+    fi
+
+# tzdata 让 TZ 生效；libsecret 对应 safeStorage（缺了 WebDAV 密码会降级明文存储）；
+# openssh-server 供容器内排查用（可选启用，见 docker/entrypoint.sh）
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-      curl ca-certificates libsecret-1-0 tzdata \
+      curl ca-certificates libsecret-1-0 tzdata openssh-server \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
+    && sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
+    && sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
+    && mkdir -p /run/sshd
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y -qq nodejs \
     && rm -rf /var/lib/apt/lists/*
@@ -61,12 +81,14 @@ COPY electron ./electron
 COPY server ./server
 COPY tools ./tools
 COPY resources ./resources
+COPY docker ./docker
 COPY package.json ./
+RUN chmod +x docker/entrypoint.sh
 
-# 9528 Web 控制台 / 9527 反代网关
-EXPOSE 9528 9527
+# 9528 Web 控制台 / 9527 反代网关 / 22 SSH（可选）
+EXPOSE 9528 9527 22
 
 # 数据（配置 / 用量库 / 号池 / 记忆仓库 / 网关统计）全量落这里，由 compose 挂到 NAS
 VOLUME /data
 
-CMD ["node", "server/index.cjs"]
+ENTRYPOINT ["/bin/bash", "/app/docker/entrypoint.sh"]

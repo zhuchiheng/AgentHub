@@ -54,14 +54,20 @@ function applyContainerEnv(config) {
     set("restoreOnLaunch", true, "容器重启后自动恢复网关服务");
   }
 
-  // 3) 定时签到：持续领积分
+  // 3) 网关监听端口：容器内可改（宿主机端口被占用时，靠端口映射绕开）
+  const gp = Number(process.env.AGENTHUB_PROXY_PORT || 0);
+  if (gp > 0 && gp < 65536 && cfg.proxy.port !== gp) {
+    set("port", gp, "网关监听端口");
+  }
+
+  // 4) 定时签到：持续领积分
   if (String(process.env.AGENTHUB_CHECKIN_AUTO || "1") !== "0") {
     set("checkinAuto", true, "NAS 常驻持续领积分");
     const t = String(process.env.AGENTHUB_CHECKIN_TIME || "").trim();
     if (t && /^\d{1,2}:\d{2}$/.test(t)) set("checkinAutoTime", t, "签到时刻（本地时区）");
   }
 
-  // 4) 定时额度刷新：NAS 常驻时保持额度新鲜（默认 30 分钟，可调）
+  // 5) 定时额度刷新：NAS 常驻时保持额度新鲜（默认 30 分钟，可调）
   const cr = Number(process.env.AGENTHUB_CREDITS_REFRESH_MIN || 0);
   if (cr > 0) set("creditsRefreshMin", cr, "额度刷新间隔（分钟）");
 

@@ -20,14 +20,30 @@ services:
     container_name: agenthub
     restart: unless-stopped
     ports:
+      # 端口内外保持一致，前端才能用浏览器地址栏的 host 推导出正确的网关地址。
+      # 若宿主机的 9527/9528 被占用（如群晖的 syslog-ng 占了 9526-9529 段），
+      # 改这两组数字即可（例如 19528:19528 / 19527:19527），并同步改下面
+      # AGENTHUB_WEB_PORT / AGENTHUB_PROXY_PORT，三者要一致。
       - "9528:9528"   # Web 控制台
       - "9527:9527"   # 反代网关（模型服务）
+      # SSH（可选）：容器内排查用。左侧是宿主机端口，按需改；不设公钥时 sshd 不会启动。
+      # 比在 NAS 上走 sudo 安全：容器内的 root 被命名空间隔离，碰不到 NAS 本体与其它服务。
+      - "12222:22"
     environment:
       # ---- Web 控制台 ----
       AGENTHUB_WEB_PORT: "9528"
       AGENTHUB_WEB_HOST: "0.0.0.0"
       # 留空 = 不鉴权。暴露到非可信网络时**务必**设置一个长随机串
       # AGENTHUB_WEB_TOKEN: "换成你的随机口令"
+
+      # ---- 反代网关 ----
+      # 网关监听端口（与上面 ports 的右侧数字一致）
+      AGENTHUB_PROXY_PORT: "9527"
+
+      # ---- SSH（可选）----
+      # 填公钥内容即启用；不填则不启动 sshd。仅密钥登录，不支持密码。
+      # 公钥会持久化到 /data/ssh/authorized_keys，之后改这里也以数据目录里的为准。
+      # AGENTHUB_SSH_PUBKEY: "ssh-ed25519 AAAA... you@host"
 
       # ---- 数据落盘（compose 里挂到 NAS）----
       AGENTHUB_DATA_DIR: "/data"
@@ -65,7 +81,9 @@ services:
       # - ~/.config:/root/.config:ro
       # - ~/.local/share:/root/.local/share:ro
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9528/api/health"]
+      # 用 shell 形式从环境变量取端口：改 AGENTHUB_WEB_PORT 时健康检查跟着走，
+      # 不必再改一次（之前硬编码 9528，换端口后容器一直是 unhealthy 却仍在正常服务）
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$${AGENTHUB_WEB_PORT:-9528}/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3

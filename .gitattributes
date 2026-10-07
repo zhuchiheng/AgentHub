@@ -7,3 +7,6 @@ build/release-notes.md text eol=lf
 # 不设全局 * text=auto：那会把全仓库已有文件重新规范化，产生大规模无意义 diff。
 tools/linux/*.sh text eol=lf
 tools/linux/*.py text eol=lf
+
+# 容器入口脚本同理：CRLF 会让 shebang 变成 "/bin/bash\r"，容器里直接起不来
+docker/*.sh text eol=lf
