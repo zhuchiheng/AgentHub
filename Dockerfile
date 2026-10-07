@@ -69,6 +69,9 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
     && sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
+    # 删掉 apt 装包时自动生成的主机密钥：改由 entrypoint 从持久化的 /data/ssh 恢复，
+    # 否则会与持久化密钥冲突，sshd 报「Public key does not match private key」
+    && rm -f /etc/ssh/ssh_host_* \
     && mkdir -p /run/sshd
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y -qq nodejs \

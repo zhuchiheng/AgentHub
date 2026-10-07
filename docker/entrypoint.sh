@@ -32,6 +32,8 @@ if [ -s "$SSH_STATE/authorized_keys" ]; then
 fi
 
 # 3) 主机密钥持久化：不持久化的话每次重建容器指纹都变，客户端会刷「主机密钥已更改」告警
+#    注意必须连 .pub 一起拷：镜像里预生成了主机密钥对，若只覆盖私钥、
+#    留着旧的公钥，sshd 会报 "Public key ... does not match private key"。
 if [ ! -f "$SSH_STATE/ssh_host_ed25519_key" ]; then
   echo "[entrypoint] 生成 SSH 主机密钥（首次）"
   ssh-keygen -q -t ed25519 -f "$SSH_STATE/ssh_host_ed25519_key" -N "" || true
@@ -41,6 +43,11 @@ for k in "$SSH_STATE"/ssh_host_*_key; do
   [ -f "$k" ] || continue
   cp -f "$k" /etc/ssh/ 2>/dev/null || true
   chmod 600 "/etc/ssh/$(basename "$k")" 2>/dev/null || true
+  # 公钥同步覆盖：漏了它就会与私钥不配对，sshd 启动时报密钥不匹配
+  if [ -f "${k}.pub" ]; then
+    cp -f "${k}.pub" /etc/ssh/ 2>/dev/null || true
+    chmod 644 "/etc/ssh/$(basename "$k").pub" 2>/dev/null || true
+  fi
 done
 
 # 4) 启动 sshd（仅在确实有公钥时）
