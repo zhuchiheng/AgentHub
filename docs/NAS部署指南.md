@@ -2,6 +2,9 @@
 
 面向：把 AgentHub 常驻跑在 NAS 上，**持续领积分**并**对外提供模型服务**。
 
+> 合并上游后要重新适配？直接跑 `node tools/linux/adapt-upstream.cjs`，
+> 见文末「§8 合并上游后的一键适配」。
+
 ---
 
 ## 0. 这套东西解决了什么
@@ -146,8 +149,23 @@ data/
 | `AGENTHUB_CHECKIN_AUTO` | `1` | 定时签到 |
 | `AGENTHUB_CHECKIN_TIME` | `09:00` | 签到时刻 |
 | `AGENTHUB_CREDITS_REFRESH_MIN` | `30` | 额度刷新间隔（分钟） |
+| `AGENTHUB_PUBLIC_HOST` | 空 | 网关接入地址里的 host（见 §4.1） |
 
 设 `0` 可关闭对应行为（如 `AGENTHUB_CHECKIN_AUTO=0`）。
+
+### 4.1 网关接入地址是怎么定的
+
+反代总览页上那个「接入地址」是要**填进 AI 客户端**的，必须真能连上。
+但容器里监听地址是 `0.0.0.0`——它是「本机所有网卡」的意思，**不是可连接地址**，
+直接拼出来会得到 `http://0.0.0.0:9527/v1`，谁填谁连不上。
+
+解析优先级：
+
+1. `AGENTHUB_PUBLIC_HOST` 显式指定 —— **CLI / 脚本场景建议设**（它们拿不到浏览器地址栏）
+2. 浏览器访问控制台时，**用地址栏的 host 推导** —— 你能打开控制台，就能用同一个 host 连网关
+3. 都没命中时回落 `127.0.0.1`（本机自用）
+
+所以浏览器里看是对的、但 `curl` 调 API 拿到 `127.0.0.1` 时，就是该设 `AGENTHUB_PUBLIC_HOST` 了。
 
 ---
 
@@ -159,3 +177,63 @@ data/
 3. **本机采集类功能需要挂载**：技能挂载、本机历史用量在 NAS 上没有对象可操作，
    这类功能属于工作机上的桌面版。推荐形态是**服务器跑 Web 版、工作机跑桌面版**，
    用已有的 WebDAV 同步通道打通。
+
+---
+
+## 8. 合并上游后的一键适配
+
+这套移植改了约 28 个上游文件，每次合并上游都可能被覆盖或冲突。
+`tools/linux/adapt-upstream.cjs` 把可判定的部分自动化：
+
+```bash
+node tools/linux/adapt-upstream.cjs          # 只检测（默认，不改任何文件）
+node tools/linux/adapt-upstream.cjs --apply  # 应用可自动化的部分
+```
+
+退出码 0/1，可直接用作 CI 门禁。
+
+### 它按鲁棒性分三层
+
+| 层 | 内容 | 处理方式 |
+|---|---|---|
+| 1 scaffold | 24 个新增文件（osdirs / proc / server / Dockerfile / tools/linux …） | 上游无同名，**永不冲突**，只检测是否在位 |
+| 2 patch | 固定模式改造（homeDir 收敛到 osdirs、koffi 惰性加载） | 发现式扫描 + 幂等应用 + **应用后自校验** |
+| 3 verify | 结构性改造（sqlcipher .so、isPortable 的 AppImage、latest-linux.yml、前端探测、打包配置、容器适配接线） | **只检测报告，不自动改** |
+
+### 为什么第 3 层不自动改
+
+这些改动逻辑复杂、与上游实现细节耦合，机器判定不了「改得对不对」。
+盲目自动化比不自动化更危险——所以只报状态，由人确认。
+
+### 它诚实地标注自己的精度边界
+
+- **win32-only 死代码**（位于 `process.platform !== "win32"` 提前 return 之后）→
+  归入「可忽略」，不计入退出码
+- **APPDATA 粗筛**识别不了跨行平台三元分支（`...(win32 ? [...] : [])`），会误报 →
+  归入「提示」，不计入退出码
+
+与其堆更多正则（越堆越脆、越容易被下一个写法绕过），不如承认边界。
+
+### 实测过的能力
+
+- **发现式**而非硬编码清单：模拟上游新增一个带老样板的 adapter，
+  脚本自动发现并修复（含 `require` 注入到正确位置）
+- 幂等：重复跑 `--apply` 无副作用
+- 自校验：应用后复扫一遍 + 逐文件 `node --check`
+
+> 教训入档：初版脚本用 `if "osdirs" not in txt` 判断要不要插 require，
+> 而替换函数体后文本里已出现 "osdirs"，判断被自己刚写的字符串骗过，
+> **9 个文件全部漏了 require**，应用启动即崩（窗口根本没建）。
+> 而 `node --check` / `vue-tsc` 全绿——语法合法，运行时才炸。
+> 现在改用正则判断 require，并在应用后复检。
+
+### 配套验证脚本
+
+| 脚本 | 用途 |
+|---|---|
+| `tools/linux/adapt-upstream.cjs` | 合并上游后的适配与自检 |
+| `tools/linux/gateway-url-selftest.cjs` | 网关接入地址推导的 11 个场景单测 |
+| `tools/linux/verify-gateway-url.sh` | 从**非回环地址**真实访问验证（回环访问区分不出修复） |
+| `tools/linux/sched-probe.cjs` | 容器内调度配置探活（签到/自启/监听地址） |
+| `tools/linux/gw-auth-check.sh` | 网关鉴权行为验证 |
+| `tools/linux/build-sqlcipher.sh` | 编译 Linux 版 libsqlcipher.so |

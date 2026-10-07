@@ -42,6 +42,16 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      - name: 网关接入地址推导单测
+        # 纯 Node，秒级。这个 bug（容器里给出 http://0.0.0.0:9527/v1）只在
+        # 容器部署时出现，桌面端永远碰不到，必须靠单测钉住。
+        run: node tools/linux/gateway-url-selftest.cjs
+
+      - name: Linux 适配自检
+        # 合并上游后若适配被覆盖/丢失，这里会红。
+        # 注意它默认只检测不改（写盘要 --apply），适合做门禁。
+        run: node tools/linux/adapt-upstream.cjs
+
       - name: 无头启动验证
         # 脚本内部会跑 前端构建 → electron-builder --dir → Xvfb 启动 → 三层判定
         run: APP_DIR="$PWD" bash tools/linux/run-headless.sh
