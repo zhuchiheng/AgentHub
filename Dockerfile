@@ -40,13 +40,16 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production \
     AGENTHUB_WEB_PORT=9528 \
-    AGENTHUB_WEB_HOST=0.0.0.0
+    AGENTHUB_WEB_HOST=0.0.0.0 \
+    AGENTHUB_DATA_DIR=/data \
+    AGENTHUB_DATA_MOUNT=/data \
+    TZ=Asia/Shanghai
 
-# libsecret 对应 safeStorage：容器里没有密钥链时 WebDAV 密码会降级明文存储，
-# 装上它（配合挂载的 gnome-keyring）能避免降级
+# tzdata 让 TZ 生效；libsecret 对应 safeStorage（缺了 WebDAV 密码会降级明文存储）
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-      curl ca-certificates libsecret-1-0 \
-    && rm -rf /var/lib/apt/lists/*
+      curl ca-certificates libsecret-1-0 tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y -qq nodejs \
     && rm -rf /var/lib/apt/lists/*
@@ -63,6 +66,7 @@ COPY package.json ./
 # 9528 Web 控制台 / 9527 反代网关
 EXPOSE 9528 9527
 
-VOLUME /root/.agenthub-server
+# 数据（配置 / 用量库 / 号池 / 记忆仓库 / 网关统计）全量落这里，由 compose 挂到 NAS
+VOLUME /data
 
 CMD ["node", "server/index.cjs"]

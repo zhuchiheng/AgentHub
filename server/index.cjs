@@ -25,8 +25,13 @@ const HOST = process.env.AGENTHUB_WEB_HOST || "0.0.0.0";
 const TOKEN = String(process.env.AGENTHUB_WEB_TOKEN || "").trim(); // 留空 = 不鉴权（仅内网）
 const DIST = path.join(__dirname, "..", "dist");
 
+// 服务端模式标记：container-env 据此决定是否覆盖桌面默认值。
+// 必须在下面 require backend 之前置位，否则 proxy 读到的还是桌面默认配置。
+process.env.AGENTHUB_SERVER_MODE = "1";
+
 const { collectIpcMain, fakeEvent } = require("./ipc-registry.cjs");
 const { ipcMain, handlers } = collectIpcMain();
+const containerEnv = require("./container-env.cjs");
 
 // 调用计数：用于冒烟验证「前端真的在通过 HTTP 调后端」，而不是仅页面返回 200
 let invokeCount = 0;
@@ -40,6 +45,15 @@ const memory = require(path.join(backendRoot, "memory", "index.cjs"));
 const usageConfig = require(path.join(backendRoot, "sync-config.cjs"));
 const usagedb = require(path.join(backendRoot, "db.cjs"));
 const usagesync = require(path.join(backendRoot, "sync.cjs"));
+
+// 容器适配：把「桌面默认值在容器里会失效」的几项补上（监听地址 / 网关自启 /
+// 定时签到），只改被环境变量覆盖的部分，桌面端行为不受影响。
+const envResult = containerEnv.applyContainerEnv(require(path.join(backendRoot, "config.cjs")));
+if (envResult.applied.length) {
+  console.log("[web] 容器适配已应用：");
+  for (const line of envResult.applied) console.log("       " + line);
+}
+if (envResult.error) console.warn("[web] 容器适配失败（将使用桌面默认值）:", envResult.error);
 
 const ctx = { ipcMain, app: shim.app, shell: shim.shell, nativeTheme: shim.nativeTheme };
 ipc.register(ctx);
@@ -230,6 +244,15 @@ server.listen(PORT, HOST, () => {
   if (!fs.existsSync(path.join(DIST, "index.html"))) {
     console.warn(`[web] 警告：未找到 ${DIST}/index.html，请运行 npm run build`);
   }
+
+  // 启动自检：容器里最容易踩的三个坑，启动时直接摊开说清楚，
+  // 避免「跑起来了但签到时刻不对 / 数据没落盘」这类沉默故障。
+  const tz = containerEnv.checkTimezone();
+  const dd = containerEnv.checkDataDir(shim.__dataRoot(), process.env.AGENTHUB_DATA_MOUNT || "/data");
+  console.log(`[web] 时区: ${tz.TZ} (${tz.offset}) ${tz.ok ? "✓" : "✗"}`);
+  if (!tz.ok) console.warn(`[web] ⚠ ${tz.hint}`);
+  console.log(`[web] 数据目录: ${dd.dataDir} ${dd.onVolume ? "✓ 已持久化" : "✗ 未落在挂载卷上（容器重建会丢数据）"}`);
+
   bootBackend().catch((e) => console.error("[web] 后端启动异常:", e && e.message));
 });
 

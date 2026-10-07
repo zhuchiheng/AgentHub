@@ -45,6 +45,10 @@ vite.config.ts.timestamp-*.mjs
 tmp/
 20[0-9][0-9]-*/
 
+# 容器部署的数据卷（本地试跑产物，不入库；NAS 上是 /volume1/docker/AgentHub/data）
+data/
+_nasdata/
+
 # 记忆仓库方案文档（本地设计稿，不入库）
 记忆仓库方案/
 

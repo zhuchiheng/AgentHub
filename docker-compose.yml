@@ -1,14 +1,18 @@
-# AgentHub Web 版（容器部署）
+# AgentHub 容器部署（NAS 常驻：持续领积分 + 提供模型服务）
 #
-# 启动：docker compose up -d
-# 访问：http://<宿主机>:9528
+# NAS 上的路径对应关系（群晖）：/volume1/docker/AgentHub ←→ Windows 的 Z:\AgentHub
+# 首次部署：
+#   mkdir -p /volume1/docker/AgentHub/data
+#   docker compose up -d --build
+# 访问：http://<NAS-IP>:9528
 #
-# 端口：
-#   9528  Web 控制台
-#   9527  反代网关（OpenAI 兼容），把 AI 客户端的 base_url 指到这里，
-#         用量明细就由网关自己记账，不需要挂载任何本机目录
+# 两个端口：
+#   9528  Web 控制台（浏览器访问与配置）
+#   9527  反代网关（OpenAI 兼容）——把 AI 客户端的 base_url 指到这里
 #
-# 数据：全部落在 ./data（容器内 /root/.agenthub-server），含配置、用量库、号池、记忆仓库
+# 关于「持续领积分」：AgentHub 自带定时签到（checkinAuto），容器里由
+# AGENTHUB_CHECKIN_AUTO 打开。签到按**本地时间**判定，故 TZ 必须正确，
+# 否则 09:00 会变成别的时刻、跨零点还可能错判「今天已跑」。
 services:
   agenthub:
     build: .
@@ -17,16 +21,42 @@ services:
     restart: unless-stopped
     ports:
       - "9528:9528"   # Web 控制台
-      - "9527:9527"   # 反代网关（可选暴露；只在容器内用就注释掉）
+      - "9527:9527"   # 反代网关（模型服务）
     environment:
+      # ---- Web 控制台 ----
       AGENTHUB_WEB_PORT: "9528"
       AGENTHUB_WEB_HOST: "0.0.0.0"
-      # 留空 = 不鉴权。部署到非可信网络时务必设置一个长随机串：
+      # 留空 = 不鉴权。暴露到非可信网络时**务必**设置一个长随机串
       # AGENTHUB_WEB_TOKEN: "换成你的随机口令"
+
+      # ---- 数据落盘（compose 里挂到 NAS）----
+      AGENTHUB_DATA_DIR: "/data"
+      AGENTHUB_DATA_MOUNT: "/data"
+
+      # ---- 时区：签到按本地时间判定，务必与你的作息一致 ----
+      TZ: "Asia/Shanghai"
+
+      # ---- 容器适配（不改桌面端默认行为，只在此处覆盖）----
+      # 网关监听地址：容器内必须 0.0.0.0，否则外部连不上
+      AGENTHUB_PROXY_BIND: "0.0.0.0"
+      # 容器重启后自动恢复网关服务（桌面端语义是「上次退出时的开关状态」，默认关）
+      AGENTHUB_PROXY_AUTOSTART: "1"
+      # 定时签到：持续领积分
+      AGENTHUB_CHECKIN_AUTO: "1"
+      AGENTHUB_CHECKIN_TIME: "09:00"
+      # 额度刷新间隔（分钟）
+      AGENTHUB_CREDITS_REFRESH_MIN: "30"
     volumes:
-      - ./data:/root/.agenthub-server
-    # 如需读取本机 AI 客户端的历史用量明细，取消下面注释挂载工作机目录。
-    # 注意：仅同构 Linux 宿主机有意义；Windows/macOS 的 Docker 挂载不转发文件事件，
-    # 自动感知收纳会失效，且 I/O 明显偏慢。走反代网关时不需要挂载。
-    # - ~/.config:/root/.config:ro
-    # - ~/.local/share:/root/.local/share:ro
+      # 全部数据（配置 / 用量库 / 号池 / 记忆仓库 / 网关统计）落 NAS
+      - ./data:/data
+      # 时区文件：让容器内时间与 NAS 一致（TZ 之外的双保险）
+      - /etc/localtime:/etc/localtime:ro
+      # 如需读取本机 AI 客户端的历史用量明细，取消注释（仅同构 Linux 宿主机有意义）
+      # - ~/.config:/root/.config:ro
+      # - ~/.local/share:/root/.local/share:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9528/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
