@@ -542,11 +542,13 @@ async function run(opts) {
     await webdav.put(remoteUrl(w, POOL_DIR, "devices", `${myId}.json`), w,
       JSON.stringify({ name: myName, appVersion: appVersion(), accountCount: snapshot.accounts.length, channel: channel || "", lastSyncAt: new Date().toISOString() }));
 
+    await runSharedSync(w, persisted, result);
     persisted.lastSyncAt = Date.now();
     savePersisted(persisted);
     state.lastSyncAt = persisted.lastSyncAt;
     state.lastSummary = `${channel ? store.channelDisplay(channel) + " · " : ""}拉取 ${result.pulled} 台设备 · 新增 ${result.added} · 刷新 ${result.updated} · 移除 ${result.removed} · ${result.uploaded ? "已上传" : "本机无变化"}`;
     state.running = false;
+    if (result.sharedSummary) state.lastSummary += " | " + result.sharedSummary;
     setStage("done", state.lastSummary);
     events.emit({ type: "poolsync", stage: "done", detail: state.lastSummary, running: false, percent: 100 });
     events.emit({ type: "status" }); // 号池页刷新
@@ -641,3 +643,99 @@ async function restoreAnchorMidFromRemote() {
 }
 
 module.exports = { run, cancel, progress, configured, noteRemoved, onSharedPasswordMaybeChanged, accountKeyOf, backupAnchorMid, restoreAnchorMidFromRemote };
+const SHARED_CONFIG_KEYS = ["modelAliases", "modelReverseAliases", "modelCustom",
+  "modelOverrides", "modelFallback", "disabledModels"];
+
+/** 本机共享配置快照（Key 先本机解密再进加密包，与 token 同规矩：绝不明文上传） */
+function exportShared() {
+  const cfg = config.loadConfig();
+  const p = cfg.proxy || {};
+  const conf = {};
+  for (const k of SHARED_CONFIG_KEYS) {
+    const v = p[k];
+    conf[k] = Array.isArray(v) ? v.slice() : (v && typeof v === "object" ? JSON.parse(JSON.stringify(v)) : {});
+  }
+  for (const [k, v] of Object.entries(remote || {})) {
+    if (JSON.stringify(out[k]) !== JSON.stringify(v)) { out[k] = v; changed++; }
+  }
+  return { out, changed };
+}
+
+/**
+ * 把对端共享配置合并进本机。
+ * 语义：映射类逐键并集、冲突取远端（远端 exportedAt 更晚）；
+ * API Key 按 id/hash 去重，只补本机没有的（本机已有的以本机为准，不覆盖启停状态）。
+ */
+function applyShared(snap) {
+  if (!snap || snap.format !== SHARED_FORMAT) return { applied: false, configChanged: 0, keyAdded: 0 };
+  const out = { applied: true, configChanged: 0, keyAdded: 0 };
+  const cfg = config.loadConfig();
+  cfg.proxy = cfg.proxy || {};
+  for (const k of SHARED_CONFIG_KEYS) {
+    const remote = (snap.config || {})[k];
+    if (!remote || typeof remote !== "object") continue;
+    const r = mergeSharedMap(cfg.proxy[k], remote);
+    if (r.changed) { cfg.proxy[k] = r.out; out.configChanged += r.changed; }
+  }
+  if (out.configChanged) config.saveConfig(cfg);
+  for (const kk of Array.isArray(snap.keys) ? snap.keys : []) {
+    if (store.importKey(kk).ok) out.keyAdded++;
+  }
+  return out;
+}
+
+/** 解开封套（不做 format 校验，交给调用方） */
+function decodeEnvelope(buf, password) {
+  const entries = zip.readZip(buf);
+  const entry = entries.find((e) => e.name === ZIP_ENTRY);
+  if (!entry) throw new Error("不是号池同步压缩包（缺少 accounts.json）");
+  const d = entry.data;
+  if (d.length < 36 || d.subarray(0, 8).toString("latin1") !== "AHPPOOL1") throw new Error("压缩包封套损坏或版本不识别");
+  const key = crypto.scryptSync(String(password || ""), KDF_SALT, 32);
+  try {
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, d.subarray(8, 20));
+    decipher.setAuthTag(d.subarray(20, 36));
+    const plain = Buffer.concat([decipher.update(d.subarray(36)), decipher.final()]);
+    return JSON.parse(plain.toString("utf8"));
+  } catch (e) {
+    throw new Error("解密失败：WebDAV 密码与打包时不一致，或压缩包已损坏");
+  }
+}
+
+/**
+ * 共享配置同步：先拉取合并、再导出上传（顺序不能反：
+ * 反过来的话本机旧配置会盖掉对端刚做的改动）。
+ * 独立成函数是为了不动 run() 主体，改动面小、也好单独验证。
+ */
+async function runSharedSync(w, persisted, result) {
+  try {
+    const got = await webdav.get(remoteUrl(w, POOL_DIR, SHARED_FILE), w);
+    if (got) {
+      const snap = decodeEnvelope(got, w.password);
+      if (snap && snap.format === SHARED_FORMAT && Number(snap.exportedAt) > Number(persisted.sharedAppliedAt || 0)) {
+        const ap = applyShared(snap);
+        persisted.sharedAppliedAt = Number(snap.exportedAt);
+        result.sharedFrom = snap.deviceName || snap.deviceId || "";
+        result.sharedConfigChanged = ap.configChanged;
+        result.sharedKeyAdded = ap.keyAdded;
+      }
+    }
+  } catch (e) { /* 对端没有 / 密码不一致解不开：不阻断号池同步 */ }
+  try {
+    const shared = exportShared();
+    // hash 只覆盖内容（不含 exportedAt），否则每次同步都因时间戳不同而重传
+    const stable = sha1(Buffer.from(JSON.stringify({ config: shared.config, keys: shared.keys })));
+    if (persisted.sharedHash !== stable) {
+      await webdav.put(remoteUrl(w, POOL_DIR, SHARED_FILE), w, encodeEnvelope(shared, w.password));
+      persisted.sharedHash = stable;
+      result.sharedUploaded = true;
+    }
+  } catch (e) { /* 上传失败不影响号池结果 */ }
+  const parts = [
+    result.sharedFrom ? "配置取自 " + result.sharedFrom : "",
+    result.sharedConfigChanged ? "改 " + result.sharedConfigChanged + " 项" : "",
+    result.sharedKeyAdded ? "补 Key " + result.sharedKeyAdded : "",
+    result.sharedUploaded ? "共享配置已上传" : "",
+  ].filter(Boolean);
+  result.sharedSummary = parts.join(" · ");
+}
