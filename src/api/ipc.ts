@@ -155,27 +155,72 @@ export const installUpdate = () => call<UpdateStatus>("install_update");
 export const openReleasePage = () => call<void>("open_release_page");
 export const openRepoPage = () => call<void>("open_repo_page");
 
+// ===== Web 模式的 SSE 广播（全页面共用一个连接）=====
+//
+// 为什么必须共用：Chrome/Safari 对同源 HTTP/1.1 只允许 **6 个并发连接**。
+// 这个应用用 v-show 保活视图，浏览过的页面不会卸载——若每个订阅者各开一条 SSE，
+// 走几个页面就把 6 个连接位全部占满，之后**任何 fetch 都排不上队**，
+// 表现为「页面显示正常，但点任何按钮都 45s 超时」。
+// 实测踩过：服务端 sseClients 恰好涨到 6，界面全卡死。
+//
+// 这里用「单例连接 + 引用计数」，N 个订阅者只占 1 个连接位。
+let sharedES: EventSource | null = null;
+const esSubscribers = new Set<(payload: unknown) => void>();
+
+function ensureSharedES(): void {
+  if (sharedES || typeof window === "undefined") return;
+  sharedES = new EventSource("/api/events");
+  sharedES.onmessage = (ev) => {
+    let frame: { payload?: unknown };
+    try {
+      frame = JSON.parse(ev.data) as { payload?: unknown };
+    } catch {
+      return; // 坏帧忽略
+    }
+    // 快照遍历：某个回调里退订不影响本轮派发
+    for (const cb of [...esSubscribers]) {
+      try {
+        cb(frame.payload);
+      } catch {
+        /* 单个订阅者异常不影响其他订阅者 */
+      }
+    }
+  };
+  // 不监听 onerror 主动 close：EventSource 自带重连，
+  // 主动关闭反而会在服务端重启后永久失联
+}
+
 /** 订阅主进程广播（更新状态 / WebDAV 进度 / 同步进度 / 网关事件），返回退订函数 */
 export function onUpdateEvent(cb: (payload: unknown) => void): (() => void) | undefined {
   if (typeof window === "undefined") return undefined;
   if (isElectron()) return window.agenthub?.onUpdateEvent?.((payload) => cb(payload));
-  // Web 服务端：后端广播经 SSE 下发。这里只把 payload 交给回调，
-  // 与 Electron 侧 onUpdateEvent 的语义保持一致（事件名在 payload.event 里）。
-  let es: EventSource | null = null;
-  isWebServer().then((web) => {
-    if (!web) return; // dev:web 预览没有后端，静默不订阅
-    es = new EventSource("/api/events");
-    es.onmessage = (ev) => {
-      try {
-        const frame = JSON.parse(ev.data) as { channel?: string; payload?: unknown };
-        cb(frame.payload);
-      } catch {
-        /* 坏帧忽略 */
-      }
-    };
+
+  // 两个要点：
+  //   registered —— 只有真的登记过才需要清理，避免误删别人的回调
+  //   stopped    —— 解决异步竞态：isWebServer() 未解析就退订时，
+  //                旧实现在 .then 里照样建连接，留下无人认领的孤儿连接（连接池泄漏）
+  let registered = false;
+  let stopped = false;
+
+  void isWebServer().then((web) => {
+    if (!web || stopped) return; // dev:web 预览没有后端；或订阅已取消
+    esSubscribers.add(cb);
+    registered = true;
+    ensureSharedES();
   });
+
   return () => {
-    if (es) es.close();
+    stopped = true;
+    if (registered) esSubscribers.delete(cb);
+    // 全部退订才断开，避免来回切页面时反复建立/断开连接
+    if (esSubscribers.size === 0 && sharedES) {
+      try {
+        sharedES.close();
+      } catch {
+        /* 已关闭 */
+      }
+      sharedES = null;
+    }
   };
 }
 
