@@ -6,6 +6,7 @@ import type { ProxyGatewayStatus, ProxyUsageRow } from "../../types";
 import { useAppStore } from "../../stores/app";
 import { fmtInt, fmtK, fmtMs, fmtTime, statusCls, fmtBalance, balanceUnit, isQoderChannel } from "./format";
 import { coalesceAsync } from "../../utils/timing";
+import { gatewayBaseUrl } from "../../utils/gateway-url";
 
 const app = useAppStore();
 const st = ref<ProxyGatewayStatus | null>(null);
@@ -45,8 +46,11 @@ async function toggleService() {
   }
 }
 
-/** 接入地址：状态里有就用，没有按配置拼一个兜底 */
-const base = computed(() => st.value?.baseUrl || `http://${app.config.proxy.bind}:${app.config.proxy.port}/v1`);
+/** 接入地址：后端给了可连接 host 就用它；Web 模式下用浏览器地址栏的 host 推导，
+ *  否则容器里会显示 127.0.0.1 或 0.0.0.0，用户照抄必然连不上 */
+const base = computed(() =>
+  gatewayBaseUrl(st.value?.baseUrl, st.value?.port || app.config.proxy.port),
+);
 
 const curlCmd = computed(
   () =>

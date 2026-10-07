@@ -482,14 +482,40 @@ function poolView() {
   });
 }
 
+/**
+ * 对外可连接地址的 host。
+ *
+ * 为什么不能直接用 bind：`0.0.0.0` / `::` 是**监听**地址，语义是「本机所有网卡」，
+ * 不是可连接地址——把它填进 OpenAI 客户端会直接连不上。
+ * 桌面端 bind=127.0.0.1 时巧合正确，容器里 bind=0.0.0.0 就暴露了这个问题。
+ *
+ * 解析优先级：
+ *   ① AGENTHUB_PUBLIC_HOST 显式指定（容器部署时最可靠，如 NAS 的域名或 IP）
+ *   ② 非通配的 bind 原样使用
+ *   ③ 通配时回落 127.0.0.1（本机自用可用；Web 端会用浏览器地址栏的 host 覆盖它）
+ */
+function clientHost() {
+  const explicit = String(process.env.AGENTHUB_PUBLIC_HOST || "").trim();
+  if (explicit) return explicit;
+  const cfg = settings();
+  const raw = String(cfg.bind || "").trim();
+  if (raw && raw !== "0.0.0.0" && raw !== "::" && raw !== "[::]") return raw;
+  return "127.0.0.1";
+}
+
 function gatewayStatus() {
   const s = server.status();
   const cfg = settings();
+  const port = s.running ? s.port : cfg.port;
+  const host = clientHost();
   return {
     ...s,
-    port: s.running ? s.port : cfg.port,
+    port,
+    // bind 保持真实监听地址（语义正确，供状态展示与排障）
     bind: s.running ? s.bind : cfg.bind,
-    baseUrl: `http://${s.running ? s.bind : cfg.bind}:${s.running ? s.port : cfg.port}/v1`,
+    // baseUrl 是**给客户端连的**地址，必须用可连接 host，不能用通配监听地址
+    clientHost: host,
+    baseUrl: `http://${host}:${port}/v1`,
     today: store.statsToday(),
     channels: store.CHANNELS.map((c) => ({ id: c.id, display: c.display, ...pool.poolSummary(c.id), health: server.channelHealthSnapshot()[c.id] || null })),
     keyCount: store.listKeys().length,

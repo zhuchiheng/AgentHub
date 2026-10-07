@@ -79,8 +79,14 @@ const ADAPTERS = [
     id: "trae-solo",
     name: "Trae Solo",
     configCandidates: [
-      path.join(process.env.APPDATA || path.join(HOME, "AppData", "Roaming"), "TRAE SOLO", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
-      path.join(process.env.APPDATA || path.join(HOME, "AppData", "Roaming"), "TRAE SOLO CN", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
+      // 按平台取配置根：Linux 走 XDG（下面已有 .config 候选，这里只是不再多拼一条
+      // 必不存在的 ~/AppData/Roaming，避免每次探测白跑一次 stat）
+      ...(process.platform === "win32"
+        ? [
+          path.join(process.env.APPDATA || path.join(HOME, "AppData", "Roaming"), "TRAE SOLO", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
+          path.join(process.env.APPDATA || path.join(HOME, "AppData", "Roaming"), "TRAE SOLO CN", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
+        ]
+        : []),
       path.join(HOME, "Library", "Application Support", "TRAE SOLO", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
       path.join(HOME, ".config", "TRAE SOLO", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"),
       path.join(HOME, ".trae-solo", "mcp.json"),

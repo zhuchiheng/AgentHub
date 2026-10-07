@@ -25,6 +25,7 @@ export type {
 } from "../types";
 
 import { mock } from "./mock";
+import { markWebServerMode } from "../utils/gateway-url";
 
 type InvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -57,7 +58,13 @@ function isWebServer(): Promise<boolean> {
     webModePromise = fetch("/api/health", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => !!(d && typeof d === "object" && (d as { ok?: unknown }).ok === true && typeof (d as { commands?: unknown }).commands === "number"))
-      .catch(() => false);
+      .catch(() => false)
+      // 把结果同步给 gateway-url：它据此决定是否用浏览器地址栏的 host 推导网关地址。
+      // 复用同一份探测结果，不额外发请求。
+      .then((ok) => {
+        markWebServerMode(ok);
+        return ok;
+      });
   }
   return webModePromise;
 }

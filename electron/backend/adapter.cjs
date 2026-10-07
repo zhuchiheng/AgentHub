@@ -37,12 +37,20 @@ function fakeHome() {
 }
 
 // 候选路径展开：~ → 用户目录；%APPDATA%/%LOCALAPPDATA%（大小写不敏感）→ 系统数据目录；相对路径按用户目录算
+// 注意：这里必须跟随 fakeHome()（自测用 AGENT_SKILLS_FAKE_HOME 把 home 指到临时目录），
+// 所以不能直接调 osdirs.roaming()——那读的是真实环境变量，会绕过自测沙箱。
+// Linux 上按 XDG 惯例映射到 .config / .local/share，不再拼出 ~/AppData 这种必不存在的路径。
 function expandPath(p) {
   const s = String(p || "").trim();
   if (!s) return "";
   const home = fakeHome();
-  const appdata = process.env.APPDATA || path.join(home, "AppData", "Roaming");
-  const localAppdata = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+  const isWin = process.platform === "win32";
+  const appdata = isWin
+    ? (process.env.APPDATA || path.join(home, "AppData", "Roaming"))
+    : (process.env.XDG_CONFIG_HOME || path.join(home, ".config"));
+  const localAppdata = isWin
+    ? (process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"))
+    : (process.env.XDG_DATA_HOME || path.join(home, ".local", "share"));
   if (s.slice(0, 9).toUpperCase() === "%APPDATA%") return path.join(appdata, s.slice(9));
   if (s.slice(0, 15).toUpperCase() === "%LOCALAPPDATA%") return path.join(localAppdata, s.slice(15));
   if (s.startsWith("~")) return path.join(home, s.slice(1));

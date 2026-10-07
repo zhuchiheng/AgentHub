@@ -46,6 +46,10 @@ services:
       AGENTHUB_CHECKIN_TIME: "09:00"
       # 额度刷新间隔（分钟）
       AGENTHUB_CREDITS_REFRESH_MIN: "30"
+      # 网关对外接入地址里的 host（给 AI 客户端填的那个地址）。
+      # 不设时：浏览器访问控制台会自动用地址栏的 host 推导（多数情况够用）；
+      # 但用 CLI/脚本读 API 拿到的会是 127.0.0.1，此时建议显式指定 NAS 的 IP 或域名。
+      # AGENTHUB_PUBLIC_HOST: "192.168.1.172"
     volumes:
       # 全部数据（配置 / 用量库 / 号池 / 记忆仓库 / 网关统计）落 NAS
       - ./data:/data
