@@ -365,6 +365,12 @@ function makeQoder(product, deps) {
         throw e;
       }
       const headers = { ...signed.headers };
+      // Qoder 的推理端点是 SSE，Accept 必须是 text/event-stream。
+      // 签名器（wasm 或 qoderCosy.cosyHeaders）默认给 application/json，
+      // 直接透传会被上游以 HTTP 500 拒绝（body: {"msgCode":500,
+      // "msgInfo":"Internal Server Error"}）；对话请求在此显式覆盖。
+      headers.Accept = "text/event-stream";
+      headers["Cache-Control"] = "no-cache";
       const payloadLen = signed.body.length;
 
       let resp = null;
