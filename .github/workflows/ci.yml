@@ -50,12 +50,12 @@ jobs:
         with:
           node-version: 22
 
-      # 分支头按防污染规则刻意不含 tools/ci/（CI 文件只允许待在 chore/ci，不能混进待提上游的 PR 分支），
+      # 分支头按防污染规则刻意不含 tools/ci/（CI 文件只允许待在 ci/fork-selftest-gate，不能混进待提上游的 PR 分支），
       # 所以脚本不能就地 node tools/ci/... 跑——那样在 PR 分支上必然 MODULE_NOT_FOUND。
       # 这里保留「检出分支头」的原意，单独从 base 分支把脚本取出来执行。
       - name: 取冲突检测脚本（本分支刻意不含 tools/ci）
         run: |
-          git fetch origin "${{ github.event.pull_request.base.ref || 'chore/ci' }}" --depth=1
+          git fetch origin "${{ github.event.pull_request.base.ref || 'ci/fork-selftest-gate' }}" --depth=1
           git show FETCH_HEAD:tools/ci/conflict-check.cjs > conflict-check.cjs
 
       - name: 冲突检测
